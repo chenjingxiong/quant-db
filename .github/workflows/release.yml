@@ -1,0 +1,240 @@
+# -*- coding: utf-8 -*-
+# Release Workflow
+# 自动化发布流程
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (e.g., 1.0.0)'
+        required: true
+
+env:
+  PYTHON_VERSION: '3.10'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===========================
+  # 创建Release
+  # ===========================
+  create-release:
+    name: 创建Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 获取版本号
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION"
+
+      - name: 生成变更日志
+        id: changelog
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          echo "## What's Changed" > changelog.md
+          echo "" >> changelog.md
+          echo "### Changes since $PREV_TAG" >> changelog.md
+          echo "" >> changelog.md
+
+          if [ -n "$PREV_TAG" ]; then
+            git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" >> changelog.md
+          else
+            git log --pretty=format:"- %s (%h)" -10 >> changelog.md
+          fi
+
+      - name: 创建Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          release_name: Release ${{ steps.get_version.outputs.version }}
+          body_path: changelog.md
+          draft: false
+          prerelease: false
+
+  # ===========================
+  # 构建发布镜像
+  # ===========================
+  build-release:
+    name: 构建发布镜像
+    runs-on: ubuntu-latest
+    needs: [create-release]
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        component: [backend, frontend]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录到Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 提取镜像元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.${{ matrix.component }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ needs.create-release.outputs.version }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+  # ===========================
+  # 构建Python包
+  # ===========================
+  build-package:
+    name: 构建Python包
+    runs-on: ubuntu-latest
+    needs: [create-release]
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装构建依赖
+        run: |
+          pip install build wheel twine
+
+      - name: 构建包
+        run: |
+          python -m build
+
+      - name: 发布到PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          twine upload dist/*
+        if: success()
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-packages
+          path: dist/
+
+  # ===========================
+  # 部署到生产环境
+  # ===========================
+  deploy-production:
+    name: 部署到生产环境
+    runs-on: ubuntu-latest
+    needs: [build-release, create-release]
+    environment:
+      name: production
+      url: https://api.quant-db.local
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.28.0'
+
+      - name: 配置kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: 部署到生产环境
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          echo "部署版本 $VERSION 到生产环境..."
+
+          # 更新镜像版本
+          kubectl set image deployment/backend \
+            backend=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION \
+            --namespace=quant-db
+
+          # 等待滚动更新完成
+          kubectl rollout status deployment/backend --namespace=quant-db --timeout=5m
+
+      - name: 验证部署
+        run: |
+          # 检查Pod状态
+          kubectl get pods --namespace=quant-db -l app=backend
+
+          # 健康检查
+          kubectl wait --for=condition=available --timeout=300s \
+            deployment/backend --namespace=quant-db
+
+  # ===========================
+  # 发布通知
+  # ===========================
+  notify-release:
+    name: 发布通知
+    runs-on: ubuntu-latest
+    needs: [create-release, build-release, build-package, deploy-production]
+    if: always()
+
+    steps:
+      - name: 发送成功通知
+        if: ${{ needs.deploy-production.result == 'success' }}
+        run: |
+          echo "✅ Release ${{ needs.create-release.outputs.version }} 发布成功！"
+
+          # 可以在这里添加Slack、Discord等通知
+          # curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+          #   -H 'Content-Type: application/json' \
+          #   -d '{"text":"Release ${{ needs.create-release.outputs.version }} 已发布！"}'
+
+      - name: 发送失败通知
+        if: ${{ needs.deploy-production.result == 'failure' }}
+        run: |
+          echo "❌ Release ${{ needs.create-release.outputs.version }} 发布失败！"

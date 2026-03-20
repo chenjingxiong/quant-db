@@ -1,0 +1,17 @@
+# -*- coding: utf-8 -*-
+# Grafana 仪表板配置
+# 自动加载Quant DB仪表板
+
+apiVersion: 1
+
+providers:
+  - name: 'Quant DB'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

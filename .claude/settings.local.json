@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /root/projects/Quant_DB -type f -name *.py -o -name *.yml -o -name *.txt -o -name *.md -o -name *.cfg -o -name *.sql -o -name .env* -o -name .gitignore)",
+      "Bash(find . -type f -name \"*.py\" -delete)",
+      "Bash(find . -type f -name \"*.yml\" -delete)",
+      "Bash(find . -type f -name \"*.cfg\" -delete)",
+      "Bash(find . -type f -name \"*.sql\" -delete)",
+      "Bash(find /root/projects/Quant_DB -type f \\\\\\(-name *.py -o -name *.yml -o -name *.yaml -o -name *.txt -o -name *.md -o -name *.conf -o -name *.cfg -o -name *.sql -o -name .env* -o -name .gitignore -o -name Dockerfile* \\\\\\))",
+      "Bash(python3 -m py_compile backend/main.py backend/api/app.py backend/config/settings.py)",
+      "Bash(python3 -c \":*)",
+      "Bash(pip install:*)",
+      "Bash(python3 -m venv venv)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip3 install:*)",
+      "Bash(docker --version)",
+      "Bash(docker-compose --version)",
+      "Bash(docker-compose config:*)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python3 -m pytest tests/ -v --tb=short)",
+      "Bash(python3 -m pytest tests/test_processors.py::TestDataCleaner::test_fill_missing_forward -v)",
+      "Bash(python3 -m pytest tests/test_processors.py::TestStreamingDataCleaner::test_clean_stream_convert_types -v)",
+      "Bash(python3 -m pytest tests/test_processors.py::TestValidator::test_validate_quote_invalid -v)"
+    ]
+  }
+}

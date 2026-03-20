@@ -1,0 +1,52 @@
+# -*- coding: utf-8 -*-
+# Docker Compose 开发环境配置
+# 使用方法: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  # 开发环境后端配置
+  backend:
+    environment:
+      - LOG_LEVEL=DEBUG
+      - API_RELOAD=true
+    volumes:
+      - ./backend:/app/backend:ro  # 只读挂载，避免权限问题
+      - ./logs:/app/logs
+      - ./data:/app/data
+    command: ["python", "backend/main.py"]
+
+  # 开发工具 - pgAdmin
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: quant_pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@quant-db.local
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - quant_network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+  # 开发工具 - Redis Commander
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: quant_redis_commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - quant_network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+volumes:
+  pgadmin_data:

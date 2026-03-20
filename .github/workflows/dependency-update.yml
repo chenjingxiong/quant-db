@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+# Dependency Update Workflow
+# 自动更新依赖
+
+name: Dependency Update
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日UTC 00:00运行
+  workflow_dispatch:
+
+jobs:
+  # ===========================
+  # 更新Python依赖
+  # ===========================
+  update-python-deps:
+    name: 更新Python依赖
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装pip-audit
+        run: pip install pip-audit
+
+      - name: 检查依赖安全
+        run: pip-audit --format json --output audit-report.json
+        continue-on-error: true
+
+      - name: 上传审计报告
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: audit-report.json
+
+      - name: 创建Pull Request
+        uses: peter-evans/create-pull-request@v6
+        if: steps.git-diff.outputs.files_added != '' || steps.git-diff.outputs.files_updated != ''
+        with:
+          title: 'chore(deps): 更新Python依赖'
+          body: |
+            自动更新Python依赖包
+
+            请检查更改并测试。
+          branch: deps/update-python-deps
+          delete-branch: true
+          commit-message: 'chore(deps): 更新Python依赖'
+          labels: dependencies, automated
+
+  # ===========================
+  # 更新Docker基础镜像
+  # ===========================
+  update-docker-base:
+    name: 更新Docker基础镜像
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 检查Python基础镜像更新
+        id: check-python
+        run: |
+          CURRENT=$(grep "FROM python:" docker/Dockerfile.backend | awk '{print $2}')
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+
+          # 获取最新版本
+          LATEST=$(skopeo list-tags docker.io/library/python | grep -oP '"3\.10\.\d+"' | sort -V | tail -1)
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT" != "$LATEST" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "New Python version available: $LATEST (current: $CURRENT)"
+          fi
+
+      - name: 更新Dockerfile
+        if: steps.check-python.outputs.needs_update == 'true'
+        run: |
+          sed -i "s/FROM python:.*/FROM python:${{ steps.check-python.outputs.latest }}-slim/" \
+            docker/Dockerfile.backend
+
+      - name: 创建Pull Request
+        if: steps.check-python.outputs.needs_update == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: 'chore(deps): 更新Python Docker基础镜像到 ${{ steps.check-python.outputs.latest }}'
+          body: |
+            Python Docker基础镜像有新版本可用
+
+            - 当前版本: ${{ steps.check-python.outputs.current }}
+            - 新版本: ${{ steps.check-python.outputs.latest }}
+          branch: deps/update-docker-base
+          delete-branch: true
+          labels: dependencies, automated, docker
+
+  # ===========================
+  # 更新GitHub Actions
+  # ===========================
+  update-actions:
+    name: 更新GitHub Actions
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 更新Actions
+        uses: actions/update-actions-version@v1
+        with:
+          target-version: major
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: 'chore(deps): 更新GitHub Actions'
+          body: |
+            自动更新GitHub Actions到最新主版本
+          branch: deps/update-actions
+          delete-branch: true
+          labels: dependencies, automated, ci

@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+# Quant DB 项目配置
+# 工具配置文件
+
+[tool.black]
+line-length = 100
+target-version = ['py39', 'py310', 'py311']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+    | \.venv
+    | \.eggs
+    | \.tox
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_gitignore = true
+skip = [".venv", "venv", "build", "dist"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "taos.*",
+    "asyncpg.*",
+    "aio_pika.*",
+    "redis.*",
+]
+ignore_missing_imports = true
+
+[tool.pylint.main]
+py-version = "3.10"
+ignore = [".venv", "venv", "build", "dist"]
+jobs = 0
+limit-inference-results = 100
+persistent = true
+suggestion-mode = true
+
+[tool.pylint.messages_control]
+max-line-length = 100
+disable = [
+    "C0103",  # invalid-name (我们使用短变量名)
+    "C0114",  # missing-module-docstring (主要模块有文档即可)
+    "C0115",  # missing-class-docstring (类文档可选)
+    "C0116",  # missing-function-docstring (简单函数不需要文档)
+    "R0903",  # too-few-public-methods (简单类不需要很多方法)
+    "R0913",  # too-many-arguments (有时需要多个参数)
+    "W0212",  # protected-access (有时需要访问protected成员)
+]
+
+[tool.pylint.format]
+max-line-length = 100
+max-module-lines = 1000
+indent-string = "    "
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "ex", "id", "ts", "_", "db"]
+
+[tool.pylint.logging]
+logging-format-style = "new"
+logging-modules = ["loguru"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-v -x --tb=short --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+    "redis: Tests requiring Redis",
+    "postgres: Tests requiring PostgreSQL",
+    "rabbitmq: Tests requiring RabbitMQ",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["backend"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.bandit]
+exclude_dirs = [".venv", "venv", "build", "dist", "tests"]
+skips = ["B101"]  # Allow assert in production code for now
+
+[tool.pip-audit]
+# Format for pip-audit output
+format = "json"
+# Vulnerability database to use
+vulnerability-service = "pypi"
+# Packages to ignore (format: "package==version")
+ignore = []

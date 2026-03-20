@@ -1,0 +1,201 @@
+# -*- coding: utf-8 -*-
+version: '3.8'
+
+services:
+  # TDengine 时序数据库
+  tdengine:
+    image: tdengine/tdengine:3.3.0.0
+    container_name: quant_tdengine
+    hostname: tdengine
+    ports:
+      - "6030:6030"
+      - "6041:6041"
+      - "6043-6049:6043-6049"
+    environment:
+      - TAOS_FQDN=tdengine
+      - TZ=Asia/Shanghai
+    volumes:
+      - tdengine_data:/var/lib/taos
+      - tdengine_log:/var/log/taos
+    networks:
+      - quant_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "taos", "-s", "SHOW DATABASES;"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: quant_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - quant_network
+    restart: unless-stopped
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PostgreSQL 关系数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: quant_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=quant_user
+      - POSTGRES_PASSWORD=quant_pass
+      - POSTGRES_DB=quant_db
+      - TZ=Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - quant_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "quant_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RabbitMQ 消息队列
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: quant_rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=quant_user
+      - RABBITMQ_DEFAULT_PASS=quant_pass
+      - RABBITMQ_DEFAULT_VHOST=/
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - quant_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Python 后端 API 服务
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: quant_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+      - TDENGINE_HOST=tdengine
+      - TDENGINE_PORT=6030
+      - TDENGINE_USER=root
+      - TDENGINE_PASSWORD=taosdata
+      - TDENGINE_DATABASE=quant_db
+      - TDENGINE_AVAILABLE=false
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=quant_user
+      - POSTGRES_PASSWORD=quant_pass
+      - POSTGRES_DB=quant_db
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=quant_user
+      - RABBITMQ_PASS=quant_pass
+      - RABBITMQ_VHOST=/
+      - JWT_SECRET_KEY=your-secret-key-change-in-production
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=*
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - backend_config:/app/config
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      tdengine:
+        condition: service_started
+    networks:
+      - quant_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Vue3 前端 Web 服务
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    container_name: quant_frontend
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+    networks:
+      - quant_network
+    restart: unless-stopped
+
+  # Nginx 反向代理服务
+  nginx:
+    image: nginx:alpine
+    container_name: quant_nginx
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - quant_network
+    restart: unless-stopped
+
+networks:
+  quant_network:
+    driver: bridge
+
+volumes:
+  tdengine_data:
+  tdengine_log:
+  redis_data:
+  postgres_data:
+  rabbitmq_data:
+  nginx_data:
+  nginx_logs:
+  backend_config:
