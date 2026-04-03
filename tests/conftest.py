@@ -15,6 +15,27 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def pytest_collection_modifyitems(config, items):
+    """默认跳过集成测试，除非指定了 --run-integration 参数"""
+    if config.getoption("--run-integration", default=False):
+        return
+
+    skip_integration = pytest.mark.skip(reason="需要 --run-integration 参数来运行集成测试")
+    for item in items:
+        if "integration" in item.keywords:
+            item.add_marker(skip_integration)
+
+
+def pytest_addoption(parser):
+    """添加自定义命令行参数"""
+    parser.addoption(
+        "--run-integration",
+        action="store_true",
+        default=False,
+        help="运行集成测试（需要外部服务）",
+    )
+
+
 @pytest.fixture(scope="session")
 def event_loop():
     """创建事件循环"""

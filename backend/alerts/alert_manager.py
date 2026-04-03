@@ -5,6 +5,7 @@
 管理告警规则、触发和通知
 """
 import asyncio
+import inspect
 from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime, timedelta
 from enum import Enum
@@ -114,7 +115,7 @@ class AlertRule:
         self._last_triggered: Optional[datetime] = None
         self._trigger_count = 0
 
-    def should_trigger(self) -> bool:
+    async def should_trigger(self) -> bool:
         """检查是否应该触发告警"""
         if not self.enabled:
             return False
@@ -125,7 +126,10 @@ class AlertRule:
             if elapsed < self.cooldown:
                 return False
 
-        return self.condition()
+        result = self.condition()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
 
     def mark_triggered(self):
         """标记为已触发"""
@@ -143,6 +147,11 @@ class AlertManager:
         self._notifiers: Dict[str, Any] = {}
         self._monitor_task: Optional[asyncio.Task] = None
         self._is_running = False
+
+    @property
+    def notifiers(self) -> Dict[str, Any]:
+        """获取通知器字典"""
+        return self._notifiers
 
     def register_rule(self, rule: AlertRule):
         """注册告警规则"""
@@ -200,11 +209,11 @@ class AlertManager:
     async def _check_rules(self):
         """检查所有规则"""
         for rule in self.rules.values():
-            if rule.should_trigger():
+            if await rule.should_trigger():
                 await self._trigger_alert(rule)
                 rule.mark_triggered()
 
-    async def _trigger_alert(self, rule: AlertRule):
+    async def _trigger_alert(self, rule: AlertRule, data: Optional[Dict] = None):
         """触发告警"""
         # 检查是否已有活跃告警
         existing_alert = self.active_alerts.get(rule.rule_id)
@@ -223,6 +232,7 @@ class AlertManager:
             metadata={
                 "trigger_count": rule._trigger_count,
                 "check_interval": rule.check_interval,
+                **(data or {}),
             }
         )
 
@@ -245,7 +255,10 @@ class AlertManager:
                 continue
 
             # 检查条件是否已恢复
-            if not rule.condition():
+            result = rule.condition()
+            if inspect.isawaitable(result):
+                result = await result
+            if not result:
                 await self._resolve_alert(rule_id)
 
     async def _resolve_alert(self, alert_id: str):
@@ -271,11 +284,16 @@ class AlertManager:
 
     async def _send_notifications(self, alert: Alert, resolved: bool = False):
         """发送通知"""
-        for notifier_name in alert.metadata.get("notifiers", []):
+        # Get notifiers from alert metadata or use all registered notifiers
+        notifier_names = alert.metadata.get("notifiers", list(self._notifiers.keys()))
+        for notifier_name in notifier_names:
             notifier = self._notifiers.get(notifier_name)
             if notifier:
                 try:
-                    await notifier.send(alert, resolved=resolved)
+                    if hasattr(notifier, 'send_safe'):
+                        await notifier.send_safe(alert, resolved=resolved)
+                    else:
+                        await notifier.send(alert, resolved=resolved)
                 except Exception as e:
                     logger.error(f"发送通知失败 ({notifier_name}): {e}")
 

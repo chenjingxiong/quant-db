@@ -4,6 +4,7 @@ FastAPI 主应用
 """
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
+from starlette.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -14,8 +15,8 @@ import time
 from ..config import get_settings
 from ..storage import TDEngineClient, SchemaManager, _check_tdengine_available
 from ..adapters import PytdxAdapter
-from ..collectors import CollectorScheduler
-from .routes import stock, futures, index, sector, collect, health, websocket
+from ..collectors.scheduler import CollectorScheduler
+from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route
 from .errors import (
     APIException,
     api_exception_handler,
@@ -278,6 +279,12 @@ curl "http://localhost:8000/api/v1/stocks/quotes?symbols=000001,600000"
     app.include_router(
         health.router,
         prefix="/health",
+        tags=["Health"],
+    )
+
+    app.include_router(
+        metrics_route.router,
+        prefix="/metrics",
         tags=["Health"],
     )
 

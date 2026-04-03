@@ -399,6 +399,66 @@ class TDEngineClient:
             logger.error(f"Insert futures quote failed: {e}")
             return False
 
+    async def insert_futures_bars(self, bars: List[Dict]) -> int:
+        """
+        批量插入期货K线
+
+        Args:
+            bars: K线数据列表
+
+        Returns:
+            成功插入的数量
+        """
+        if not bars:
+            return 0
+
+        try:
+            grouped: Dict[str, List[Dict]] = {}
+            for bar in bars:
+                symbol = bar.get("symbol", "")
+                if symbol:
+                    if symbol not in grouped:
+                        grouped[symbol] = []
+                    grouped[symbol].append(bar)
+
+            total_inserted = 0
+
+            for symbol, symbol_bars in grouped.items():
+                table_name = f"futures_bars_{symbol}"
+                interval = symbol_bars[0].get("interval", "1min")
+
+                params_list = []
+                for bar in symbol_bars:
+                    ts = self._format_timestamp(bar.get("ts"))
+                    tags = (symbol, bar.get("exchange", "CFFEX"), interval)
+                    fields = (
+                        ts,
+                        bar.get("open"),
+                        bar.get("high"),
+                        bar.get("low"),
+                        bar.get("close"),
+                        bar.get("volume"),
+                        bar.get("amount"),
+                        bar.get("open_interest"),
+                        bar.get("settlement"),
+                    )
+                    params_list.append(tags + fields)
+
+                sql = f"""
+                    INSERT INTO {table_name} USING futures_bars TAGS (?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+
+                await self.execute_many(sql, params_list)
+                total_inserted += len(symbol_bars)
+
+            self.stats["total_inserted"] += total_inserted
+            return total_inserted
+
+        except Exception as e:
+            logger.error(f"Insert futures bars failed: {e}")
+            return 0
+
     async def query_stock_bars(
         self,
         symbol: str,
@@ -457,6 +517,68 @@ class TDEngineClient:
             return ts
         else:
             return str(ts)
+
+    async def query_futures_bars(
+        self,
+        symbol: str,
+        interval: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 1000,
+    ) -> List[Dict]:
+        """
+        查询期货K线
+
+        Args:
+            symbol: 合约代码
+            interval: 周期
+            start_time: 开始时间
+            end_time: 结束时间
+            limit: 数量限制
+
+        Returns:
+            K线数据列表
+        """
+        # Validate symbol to prevent injection
+        if not symbol.replace("_", "").replace("-", "").isalnum():
+            logger.warning(f"Invalid futures symbol: {symbol}")
+            return []
+
+        table_name = f"futures_bars_{symbol}"
+        sql = f"SELECT * FROM {table_name} WHERE interval = ?"
+
+        params = [interval]
+        if start_time:
+            sql += " AND ts >= ?"
+            params.append(self._format_timestamp(start_time))
+        if end_time:
+            sql += " AND ts <= ?"
+            params.append(self._format_timestamp(end_time))
+
+        sql += " ORDER BY ts DESC LIMIT ?"
+        params.append(str(limit))
+
+        return await self.query(sql, tuple(params))
+
+    async def query_futures_quote_latest(self, symbol: str) -> Optional[Dict]:
+        """
+        查询期货最新行情
+
+        Args:
+            symbol: 合约代码
+
+        Returns:
+            行情数据
+        """
+        if not symbol.replace("_", "").replace("-", "").isalnum():
+            logger.warning(f"Invalid futures symbol: {symbol}")
+            return None
+
+        table_name = f"futures_quotes_{symbol}"
+        sql = f"SELECT * FROM {table_name} ORDER BY ts DESC LIMIT 1"
+
+        result = await self.query(sql)
+        return result[0] if result else None
 
     async def use_database(self, database: str):
         """切换数据库"""

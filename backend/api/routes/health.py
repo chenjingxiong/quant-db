@@ -192,8 +192,8 @@ async def check_redis() -> ComponentHealth:
     start = datetime.now()
     try:
         from ...cache import get_cache_manager
-        cache = get_cache_manager()
-        client = cache._get_client()
+        cache = await get_cache_manager()
+        client = await cache._get_client()
 
         await client.ping()
         response_time = (datetime.now() - start).total_seconds() * 1000

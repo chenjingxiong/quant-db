@@ -242,12 +242,14 @@ async def setup_default_alerts(
         alert_manager.register_rule(rule)
 
     # 注册通知器
+    # 注册默认日志通知器
+    from .notifiers import LogNotifier
+    alert_manager.register_notifier("log", LogNotifier())
+
+    # 注册额外的通知器
     if notifiers:
-        # 默认使用日志通知器
-        from .notifiers import LogNotifier
-        alert_manager.register_notifier("log", LogNotifier())
-    else:
         for name, notifier in notifiers.items():
             alert_manager.register_notifier(name, notifier)
 
+    from loguru import logger
     logger.info(f"已注册 {len(rules)} 个默认告警规则")

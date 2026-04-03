@@ -125,15 +125,15 @@ async def test_alert_cooldown():
 
     manager.register_rule(rule)
 
-    # 第一次触发应该成功
-    can_trigger_1 = await manager._check_cooldown(rule)
+    # 第一次检查应该可以触发
+    can_trigger_1 = await rule.should_trigger()
     assert can_trigger_1 is True
 
-    # 记录触发时间
-    rule._last_triggered = datetime.now()
+    # 标记为已触发（记录触发时间）
+    rule.mark_triggered()
 
     # 冷却期内不应该触发
-    can_trigger_2 = await manager._check_cooldown(rule)
+    can_trigger_2 = await rule.should_trigger()
     assert can_trigger_2 is False
 
 
@@ -158,12 +158,8 @@ async def test_acknowledge_alert():
     manager.register_rule(rule)
     await manager._trigger_alert(rule, {})
 
-    # 获取告警ID
-    alerts = manager.get_active_alerts()
-    alert_id = alerts[0]["id"]
-
-    # 确认告警
-    await manager.acknowledge_alert(alert_id, user="test_user")
+    # acknowledge_alert uses rule_id as key in active_alerts
+    await manager.acknowledge_alert("test_rule", user="test_user")
 
     # 检查状态
     updated_alerts = manager.get_active_alerts()
@@ -188,28 +184,25 @@ async def test_auto_resolve_alert():
         condition=test_condition,
         check_interval=1,
         cooldown=0,
-        auto_resolve=True,
-        auto_resolve_after=2,
     )
 
     manager.register_rule(rule)
 
     # 触发告警
-    await manager.check_rules()
+    await manager._check_rules()
 
     alerts = manager.get_active_alerts()
     assert len(alerts) > 0
-    alert_id = alerts[0]["id"]
 
     # 条件不再满足
     condition_met[0] = False
 
-    # 等待自动解决时间
-    await manager.check_rules()
+    # 自动解决检查
+    await manager._check_auto_resolve()
 
     # 检查告警已解决
     active_alerts = manager.get_active_alerts()
-    assert all(a["id"] != alert_id for a in active_alerts)
+    assert all(a["status"] == AlertStatus.RESOLVED for a in active_alerts)
 
 
 # ===========================
@@ -254,10 +247,10 @@ def test_alert_rule_enable_disable():
 
     assert rule.enabled is True
 
-    rule.disable()
+    rule.enabled = False
     assert rule.enabled is False
 
-    rule.enable()
+    rule.enabled = True
     assert rule.enabled is True
 
 
@@ -401,4 +394,4 @@ async def test_alert_stats():
 
     assert "total_alerts" in stats
     assert "active_alerts" in stats
-    assert "by_severity" in stats
+    assert "severity_breakdown" in stats

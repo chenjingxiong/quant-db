@@ -3,10 +3,14 @@
 综合集成测试
 
 测试各个模块之间的集成
+注意：这些测试需要外部服务（Redis, RabbitMQ, PostgreSQL等）
 """
 import pytest
 import asyncio
 from datetime import datetime, timedelta
+
+# 标记所有测试为集成测试，需要外部服务
+pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
@@ -250,6 +254,7 @@ class TestEndToEndIntegration:
 
 # 性能测试
 @pytest.mark.asyncio
+@pytest.mark.integration
 class TestPerformance:
     """性能测试"""
 

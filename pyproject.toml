@@ -86,7 +86,7 @@ logging-modules = ["loguru"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-v -x --tb=short --strict-markers"
+addopts = "-v --tb=short --strict-markers"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]

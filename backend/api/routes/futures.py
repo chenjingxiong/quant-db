@@ -67,13 +67,10 @@ async def get_futures_quotes(
         result = []
 
         for symbol in symbol_list:
-            # 查询最新行情
-            table_name = f"futures_quotes_{symbol}"
-            sql = f"SELECT * FROM {table_name} ORDER BY ts DESC LIMIT 1"
-            data = await client.query(sql)
+            data = await client.query_futures_quote_latest(symbol)
 
             if data:
-                row = data[0]
+                row = data
                 result.append(FuturesQuoteResponse(
                     symbol=symbol,
                     ts=row.get("ts", ""),
@@ -114,17 +111,13 @@ async def get_futures_bars(
         start_dt = datetime.fromisoformat(start_time) if start_time else None
         end_dt = datetime.fromisoformat(end_time) if end_time else None
 
-        table_name = f"futures_bars_{symbol}"
-        sql = f"SELECT * FROM {table_name} WHERE interval = '{interval}'"
-
-        if start_dt:
-            sql += f" AND ts >= '{start_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
-        if end_dt:
-            sql += f" AND ts <= '{end_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
-
-        sql += f" ORDER BY ts DESC LIMIT {limit}"
-
-        data = await client.query(sql)
+        data = await client.query_futures_bars(
+            symbol=symbol,
+            interval=interval,
+            start_time=start_dt,
+            end_time=end_dt,
+            limit=limit,
+        )
 
         return {
             "symbol": symbol,

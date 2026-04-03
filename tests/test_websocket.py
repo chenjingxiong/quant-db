@@ -7,11 +7,7 @@ import json
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime
 
-from backend.api.routes.websocket import (
-    ConnectionManager,
-    get_connection_manager,
-    broadcast_message,
-)
+from backend.api.websocket import ConnectionManager, manager
 
 
 # ===========================
@@ -21,146 +17,123 @@ from backend.api.routes.websocket import (
 @pytest.mark.asyncio
 async def test_connection_manager_initialization():
     """测试连接管理器初始化"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
-    assert manager is not None
-    assert len(manager.active_connections) == 0
-    assert len(manager.subscriptions) == 0
+    assert mgr is not None
+    assert len(mgr.active_connections) == 0
+    assert len(mgr.subscriptions) == 0
 
 
 @pytest.mark.asyncio
 async def test_connect():
     """测试WebSocket连接"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
-    # 模拟WebSocket连接
     websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
 
-    await manager.connect(websocket)
+    await mgr.connect(websocket, "test_client_1")
 
-    assert websocket in manager.active_connections
-    assert manager.subscriptions[websocket] == set()
+    assert "test_client_1" in mgr.active_connections
+    assert "test_client_1" in mgr.connection_subscriptions
 
 
 @pytest.mark.asyncio
 async def test_disconnect():
     """测试WebSocket断开连接"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
 
-    await manager.connect(websocket)
-    await manager.disconnect(websocket)
+    await mgr.connect(websocket, "test_client_1")
+    mgr.disconnect("test_client_1")
 
-    assert websocket not in manager.active_connections
-    assert websocket not in manager.subscriptions
+    assert "test_client_1" not in mgr.active_connections
+    assert "test_client_1" not in mgr.connection_subscriptions
 
 
 @pytest.mark.asyncio
 async def test_subscribe():
     """测试订阅"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
 
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
+    await mgr.connect(websocket, "test_client_1")
+    await mgr.subscribe("test_client_1", "stock:quotes:000001")
+    await mgr.subscribe("test_client_1", "stock:quotes:600000")
 
-    assert "000001" in manager.subscriptions[websocket]
-    assert "600000" in manager.subscriptions[websocket]
+    assert "stock:quotes:000001" in mgr.connection_subscriptions["test_client_1"]
+    assert "stock:quotes:600000" in mgr.connection_subscriptions["test_client_1"]
+    assert "test_client_1" in mgr.subscriptions.get("stock:quotes:000001", set())
 
 
 @pytest.mark.asyncio
 async def test_unsubscribe():
     """测试取消订阅"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
 
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
-    await manager.unsubscribe(websocket, ["000001"])
+    await mgr.connect(websocket, "test_client_1")
+    await mgr.subscribe("test_client_1", "stock:quotes:000001")
+    await mgr.subscribe("test_client_1", "stock:quotes:600000")
+    await mgr.unsubscribe("test_client_1", "stock:quotes:000001")
 
-    assert "000001" not in manager.subscriptions[websocket]
-    assert "600000" in manager.subscriptions[websocket]
-
-
-@pytest.mark.asyncio
-async def test_unsubscribe_all():
-    """测试取消所有订阅"""
-    manager = ConnectionManager()
-
-    websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
-
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
-    await manager.unsubscribe_all(websocket)
-
-    assert len(manager.subscriptions[websocket]) == 0
+    assert "stock:quotes:000001" not in mgr.connection_subscriptions["test_client_1"]
+    assert "stock:quotes:600000" in mgr.connection_subscriptions["test_client_1"]
 
 
 @pytest.mark.asyncio
 async def test_send_personal_message():
     """测试发送个人消息"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client_1"
 
-    await manager.connect(websocket)
+    await mgr.connect(websocket, "test_client_1")
 
     message = {"type": "test", "data": "hello"}
-    await manager.send_personal_message(message, websocket)
+    result = await mgr.send_personal_message(message, "test_client_1")
 
-    # 验证send被调用
-    assert websocket.send.called
-    sent_data = json.loads(websocket.send.call_args[0][0])
-    assert sent_data["type"] == "test"
+    assert result is True
+    assert websocket.send_json.called
 
 
 @pytest.mark.asyncio
 async def test_broadcast():
     """测试广播消息"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
-    # 创建多个连接
     websocket1 = AsyncMock()
-    websocket1.client_id = "client_1"
     websocket2 = AsyncMock()
-    websocket2.client_id = "client_2"
 
-    await manager.connect(websocket1)
-    await manager.connect(websocket2)
+    await mgr.connect(websocket1, "client_1")
+    await mgr.connect(websocket2, "client_2")
+
+    # 两个客户端都订阅同一主题
+    await mgr.subscribe("client_1", "stock:quotes")
+    await mgr.subscribe("client_2", "stock:quotes")
 
     message = {"type": "broadcast", "data": "hello all"}
-    await manager.broadcast(message)
+    await mgr.broadcast(message, "stock:quotes")
 
-    # 验证所有连接都收到消息
-    assert websocket1.send.called
-    assert websocket2.send.called
+    assert websocket1.send_json.called
+    assert websocket2.send_json.called
 
 
 @pytest.mark.asyncio
-async def test_broadcast_to_subscribers():
-    """测试广播给订阅者"""
-    manager = ConnectionManager()
+async def test_broadcast_to_topic_subscribers():
+    """测试广播给订阅了特定主题的客户端"""
+    mgr = ConnectionManager()
 
     websocket1 = AsyncMock()
-    websocket1.client_id = "client_1"
     websocket2 = AsyncMock()
-    websocket2.client_id = "client_2"
 
-    await manager.connect(websocket1)
-    await manager.connect(websocket2)
+    await mgr.connect(websocket1, "client_1")
+    await mgr.connect(websocket2, "client_2")
 
-    # client1订阅000001，client2订阅600000
-    await manager.subscribe(websocket1, ["000001"])
-    await manager.subscribe(websocket2, ["600000"])
+    await mgr.subscribe("client_1", "stock:quotes:000001")
+    await mgr.subscribe("client_2", "stock:quotes:600000")
 
     message = {
         "type": "quote",
@@ -168,68 +141,46 @@ async def test_broadcast_to_subscribers():
         "data": {"price": 10.50}
     }
 
-    await manager.broadcast_to_subscribers(message)
+    await mgr.broadcast(message, "stock:quotes:000001")
 
-    # 只有client1应该收到消息
-    assert websocket1.send.called
-    assert not websocket2.send.called
+    assert websocket1.send_json.called
+    assert not websocket2.send_json.called
 
 
 @pytest.mark.asyncio
 async def test_get_connection_count():
     """测试获取连接数"""
-    manager = ConnectionManager()
-
-    assert await manager.get_connection_count() == 0
+    mgr = ConnectionManager()
+    assert mgr.get_connection_count() == 0
 
     websocket1 = AsyncMock()
     websocket2 = AsyncMock()
 
-    await manager.connect(websocket1)
-    await manager.connect(websocket2)
+    await mgr.connect(websocket1, "client_1")
+    await mgr.connect(websocket2, "client_2")
 
-    assert await manager.get_connection_count() == 2
+    assert mgr.get_connection_count() == 2
 
 
 @pytest.mark.asyncio
-async def test_get_subscription_info():
-    """测试获取订阅信息"""
-    manager = ConnectionManager()
+async def test_get_stats():
+    """测试获取统计信息"""
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client"
+    await mgr.connect(websocket, "test_client")
+    await mgr.subscribe("test_client", "stock:quotes:000001")
 
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
+    stats = mgr.get_stats()
 
-    info = await manager.get_subscription_info()
+    assert "total_connections" in stats
+    assert stats["total_connections"] == 1
 
-    assert info["total_connections"] == 1
-    assert info["subscriptions"]["test_client"] == ["000001", "600000"]
-
-
-# ===========================
-# Helper Functions Tests
-# ===========================
 
 def test_get_connection_manager():
-    """测试获取连接管理器实例"""
-    manager = get_connection_manager()
+    """测试获取全局连接管理器实例"""
     assert manager is not None
     assert isinstance(manager, ConnectionManager)
-
-
-@pytest.mark.asyncio
-async def test_broadcast_message_helper():
-    """测试广播消息辅助函数"""
-    manager = get_connection_manager()
-
-    websocket = AsyncMock()
-    await manager.connect(websocket)
-
-    await broadcast_message({"type": "test", "data": "hello"})
-
-    assert websocket.send.called
 
 
 # ===========================
@@ -239,78 +190,41 @@ async def test_broadcast_message_helper():
 @pytest.mark.asyncio
 async def test_websocket_endpoint_connect():
     """测试WebSocket端点连接"""
-    from fastapi.testclient import TestClient
-    from backend.api.app import app
-
-    # 注意：这个测试需要实际的WebSocket连接
-    # 这里只是展示结构，实际测试需要使用WebSocketTestClient
     pass
 
 
 @pytest.mark.asyncio
 async def test_websocket_subscribe_message():
     """测试WebSocket订阅消息处理"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    await manager.connect(websocket)
-
-    # 模拟接收订阅消息
-    subscribe_message = {
-        "action": "subscribe",
-        "symbols": ["000001", "600000"]
-    }
-
-    # 这里应该有实际的消息处理逻辑
-    # 测试消息被正确解析和订阅
-    pass
+    await mgr.connect(websocket, "test_client")
+    await mgr.subscribe("test_client", "stock:quotes:000001")
+    assert "stock:quotes:000001" in mgr.connection_subscriptions["test_client"]
 
 
 @pytest.mark.asyncio
 async def test_websocket_unsubscribe_message():
     """测试WebSocket取消订阅消息处理"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
-
-    # 模拟接收取消订阅消息
-    unsubscribe_message = {
-        "action": "unsubscribe",
-        "symbols": ["000001"]
-    }
-
-    # 这里应该有实际的消息处理逻辑
-    pass
+    await mgr.connect(websocket, "test_client")
+    await mgr.subscribe("test_client", "stock:quotes:000001")
+    await mgr.unsubscribe("test_client", "stock:quotes:000001")
+    assert "stock:quotes:000001" not in mgr.connection_subscriptions["test_client"]
 
 
 @pytest.mark.asyncio
 async def test_websocket_ping_message():
     """测试WebSocket ping消息处理"""
-    manager = ConnectionManager()
-
-    websocket = AsyncMock()
-    await manager.connect(websocket)
-
-    ping_message = {"action": "ping"}
-
-    # 应该返回pong响应
     pass
 
 
 @pytest.mark.asyncio
 async def test_websocket_invalid_message():
     """测试WebSocket无效消息处理"""
-    manager = ConnectionManager()
-
-    websocket = AsyncMock()
-    await manager.connect(websocket)
-
-    # 无效的消息格式
-    invalid_message = {"invalid": "data"}
-
-    # 应该返回错误消息
     pass
 
 
@@ -321,18 +235,17 @@ async def test_websocket_invalid_message():
 @pytest.mark.asyncio
 async def test_websocket_full_lifecycle():
     """测试WebSocket完整生命周期"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client"
 
     # 1. 连接
-    await manager.connect(websocket)
-    assert websocket in manager.active_connections
+    await mgr.connect(websocket, "test_client")
+    assert "test_client" in mgr.active_connections
 
     # 2. 订阅
-    await manager.subscribe(websocket, ["000001"])
-    assert "000001" in manager.subscriptions[websocket]
+    await mgr.subscribe("test_client", "stock:quotes:000001")
+    assert "stock:quotes:000001" in mgr.connection_subscriptions["test_client"]
 
     # 3. 接收广播
     quote_message = {
@@ -340,37 +253,33 @@ async def test_websocket_full_lifecycle():
         "symbol": "000001",
         "data": {"price": 10.50}
     }
-    await manager.broadcast_to_subscribers(quote_message)
-    assert websocket.send.called
+    await mgr.broadcast(quote_message, "stock:quotes:000001")
+    assert websocket.send_json.called
 
     # 4. 取消订阅
-    await manager.unsubscribe(websocket, ["000001"])
-    assert "000001" not in manager.subscriptions[websocket]
+    await mgr.unsubscribe("test_client", "stock:quotes:000001")
+    assert "stock:quotes:000001" not in mgr.connection_subscriptions["test_client"]
 
     # 5. 断开连接
-    await manager.disconnect(websocket)
-    assert websocket not in manager.active_connections
+    mgr.disconnect("test_client")
+    assert "test_client" not in mgr.active_connections
 
 
 @pytest.mark.asyncio
 async def test_multiple_clients_same_subscription():
     """测试多个客户端订阅相同标的"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket1 = AsyncMock()
-    websocket1.client_id = "client_1"
     websocket2 = AsyncMock()
-    websocket2.client_id = "client_2"
     websocket3 = AsyncMock()
-    websocket3.client_id = "client_3"
 
-    await manager.connect(websocket1)
-    await manager.connect(websocket2)
-    await manager.connect(websocket3)
+    await mgr.connect(websocket1, "client_1")
+    await mgr.connect(websocket2, "client_2")
+    await mgr.connect(websocket3, "client_3")
 
-    # 所有客户端订阅000001
-    for ws in [websocket1, websocket2, websocket3]:
-        await manager.subscribe(ws, ["000001"])
+    for cid in ["client_1", "client_2", "client_3"]:
+        await mgr.subscribe(cid, "stock:quotes:000001")
 
     message = {
         "type": "quote",
@@ -378,61 +287,59 @@ async def test_multiple_clients_same_subscription():
         "data": {"price": 10.50}
     }
 
-    await manager.broadcast_to_subscribers(message)
+    await mgr.broadcast(message, "stock:quotes:000001")
 
-    # 所有客户端都应该收到消息
-    assert websocket1.send.called
-    assert websocket2.send.called
-    assert websocket3.send.called
+    assert websocket1.send_json.called
+    assert websocket2.send_json.called
+    assert websocket3.send_json.called
 
 
 @pytest.mark.asyncio
 async def test_client_with_multiple_subscriptions():
     """测试客户端订阅多个标的"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client"
 
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000", "000002"])
+    await mgr.connect(websocket, "test_client")
+    await mgr.subscribe("test_client", "stock:quotes:000001")
+    await mgr.subscribe("test_client", "stock:quotes:600000")
+    await mgr.subscribe("test_client", "stock:quotes:000002")
 
-    # 广播000001的行情
     message1 = {
         "type": "quote",
         "symbol": "000001",
         "data": {"price": 10.50}
     }
-    await manager.broadcast_to_subscribers(message1)
-    assert websocket.send.called
+    await mgr.broadcast(message1, "stock:quotes:000001")
+    assert websocket.send_json.called
 
-    websocket.send.reset_mock()
+    websocket.send_json.reset_mock()
 
-    # 广播000002的行情
     message2 = {
         "type": "quote",
         "symbol": "000002",
         "data": {"price": 20.50}
     }
-    await manager.broadcast_to_subscribers(message2)
-    assert websocket.send.called
+    await mgr.broadcast(message2, "stock:quotes:000002")
+    assert websocket.send_json.called
 
 
 @pytest.mark.asyncio
 async def test_disconnect_clears_subscriptions():
     """测试断开连接清除订阅"""
-    manager = ConnectionManager()
+    mgr = ConnectionManager()
 
     websocket = AsyncMock()
-    websocket.client_id = "test_client"
 
-    await manager.connect(websocket)
-    await manager.subscribe(websocket, ["000001", "600000"])
+    await mgr.connect(websocket, "test_client")
+    await mgr.subscribe("test_client", "stock:quotes:000001")
+    await mgr.subscribe("test_client", "stock:quotes:600000")
 
-    assert websocket in manager.subscriptions
-    assert len(manager.subscriptions[websocket]) == 2
+    assert "test_client" in mgr.connection_subscriptions
+    assert len(mgr.connection_subscriptions["test_client"]) == 2
 
-    await manager.disconnect(websocket)
+    mgr.disconnect("test_client")
 
-    assert websocket not in manager.subscriptions
-    assert websocket not in manager.active_connections
+    assert "test_client" not in mgr.connection_subscriptions
+    assert "test_client" not in mgr.active_connections

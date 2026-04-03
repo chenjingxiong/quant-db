@@ -196,6 +196,9 @@ class EmailNotifier(BaseNotifier):
 class LogNotifier(BaseNotifier):
     """日志通知器（用于测试）"""
 
+    def __init__(self, name: str = "log", enabled: bool = True):
+        super().__init__(name, enabled)
+
     async def send(self, alert: Any, resolved: bool = False):
         """记录告警到日志"""
         level = logger.warning if alert.severity.value == "warning" else logger.error

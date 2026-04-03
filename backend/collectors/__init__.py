@@ -2,12 +2,13 @@
 """
 数据采集模块
 """
-from .scheduler import CollectorScheduler, CollectionTask
 from .cache import DataCache, PriorityDataCache
+from .scheduler import CollectorScheduler, CollectionTask, TaskStatus
 
 __all__ = [
-    "CollectorScheduler",
-    "CollectionTask",
     "DataCache",
     "PriorityDataCache",
+    "CollectorScheduler",
+    "CollectionTask",
+    "TaskStatus",
 ]
