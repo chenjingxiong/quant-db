@@ -16,7 +16,7 @@ from ..config import get_settings
 from ..storage import TDEngineClient, SchemaManager, _check_tdengine_available
 from ..adapters import PytdxAdapter
 from ..collectors.scheduler import CollectorScheduler
-from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route
+from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route, indicators, screener, portfolio, backtest
 from .errors import (
     APIException,
     api_exception_handler,
@@ -142,6 +142,14 @@ def create_app() -> FastAPI:
         {
             "name": "Alerts",
             "description": "告警管理和配置接口"
+        },
+        {
+            "name": "Indicators",
+            "description": "技术指标计算接口，支持SMA/EMA/MACD/KDJ/RSI/BOLL等"
+        },
+        {
+            "name": "Screener",
+            "description": "智能选股和自选股管理接口"
         }
     ]
 
@@ -332,6 +340,34 @@ curl "http://localhost:8000/api/v1/stocks/quotes?symbols=000001,600000"
         tags=["WebSocket"],
     )
 
+    # 技术指标路由
+    app.include_router(
+        indicators.router,
+        prefix="/api/v1/indicators",
+        tags=["Indicators"],
+    )
+
+    # 智能选股路由
+    app.include_router(
+        screener.router,
+        prefix="/api/v1/screener",
+        tags=["Screener"],
+    )
+
+    # 组合管理路由
+    app.include_router(
+        portfolio.router,
+        prefix="/api/v1/portfolios",
+        tags=["Portfolio"],
+    )
+
+    # 回测路由
+    app.include_router(
+        backtest.router,
+        prefix="/api/v1/backtest",
+        tags=["Backtest"],
+    )
+
     # 根路径
     @app.get(
         "/",
@@ -385,6 +421,7 @@ curl "http://localhost:8000/api/v1/stocks/quotes?symbols=000001,600000"
                 "collection": "/api/v1/collect",
                 "auth": "/api/v1/auth",
                 "alerts": "/api/v1/alerts",
+                "indicators": "/api/v1/indicators",
                 "websocket": "/ws"
             }
         }

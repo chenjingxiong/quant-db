@@ -64,6 +64,24 @@ const routes = [
     name: 'Settings',
     component: () => import('../views/User/Profile.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/screener',
+    name: 'Screener',
+    component: () => import('../views/Screener/Index.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/portfolio',
+    name: 'Portfolio',
+    component: () => import('../views/Portfolio/Index.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/backtest',
+    name: 'Backtest',
+    component: () => import('../views/Backtest/Index.vue'),
+    meta: { requiresAuth: true }
   }
 ]
 
