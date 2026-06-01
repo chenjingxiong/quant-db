@@ -12,6 +12,20 @@ import asyncio
 
 router = APIRouter()
 
+# Track app start time
+_app_start_time: datetime = None
+
+
+def set_app_start_time():
+    """Set the app start time (called from lifespan)"""
+    global _app_start_time
+    _app_start_time = datetime.now()
+
+
+def get_app_start_time() -> datetime:
+    """Get the app start time"""
+    return _app_start_time or datetime.now()
+
 
 class ComponentHealth(BaseModel):
     """组件健康状态"""
@@ -69,7 +83,7 @@ async def check_health() -> HealthResponse:
     components = {}
 
     # 计算运行时间
-    uptime = (start_time - datetime(2024, 1, 1)).total_seconds()
+    uptime = (start_time - get_app_start_time()).total_seconds()
 
     # 检查PostgreSQL
     components["postgresql"] = await check_postgresql()
@@ -195,11 +209,13 @@ async def check_redis() -> ComponentHealth:
         cache = await get_cache_manager()
         client = await cache._get_client()
 
-        await client.ping()
+        # RedisClient封装类，内部_client是aioredis.Redis实例
+        redis_conn = client._client if hasattr(client, '_client') else client
+        await redis_conn.ping()
         response_time = (datetime.now() - start).total_seconds() * 1000
 
         # 获取Redis信息
-        info = await client.info()
+        info = await redis_conn.info()
 
         return ComponentHealth(
             name="redis",
@@ -224,8 +240,12 @@ async def check_rabbitmq() -> ComponentHealth:
         from ...messaging import get_rabbitmq_connection
         conn = await get_rabbitmq_connection()
 
-        # 简单检查连接
-        is_open = conn is not None and not conn.is_closed
+        # 简单检查连接 (aio-pika 9.x: 使用 is_connected 或检查 _connection)
+        is_open = conn is not None
+        if is_open and hasattr(conn, '_connection') and conn._connection is not None:
+            is_open = not conn._connection.is_closed
+        elif is_open and hasattr(conn, 'is_closed'):
+            is_open = not conn.is_closed
 
         response_time = (datetime.now() - start).total_seconds() * 1000
 

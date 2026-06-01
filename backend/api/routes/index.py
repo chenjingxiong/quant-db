@@ -8,9 +8,17 @@ from typing import List, Optional
 from datetime import datetime
 from loguru import logger
 
+import re
 from ...storage import TDEngineClient
 
 router = APIRouter()
+
+
+def _validate_identifier(name: str) -> str:
+    """Validate SQL identifier (table/column name) to prevent injection."""
+    if not re.match(r'^[a-zA-Z0-9_]+$', name):
+        raise HTTPException(status_code=400, detail=f"Invalid identifier: {name}")
+    return name
 
 
 @router.get("/quotes")
@@ -49,7 +57,7 @@ async def get_index_quotes(
         result = []
 
         for symbol in symbol_list:
-            table_name = f"index_quotes_{symbol}"
+            table_name = f"index_quotes_{_validate_identifier(symbol)}"
             sql = f"SELECT * FROM {table_name} ORDER BY ts DESC LIMIT 1"
             data = await client.query(sql)
 
@@ -82,15 +90,16 @@ async def get_index_bars(
         start_dt = datetime.fromisoformat(start_time) if start_time else None
         end_dt = datetime.fromisoformat(end_time) if end_time else None
 
-        table_name = f"index_bars_{symbol}"
-        sql = f"SELECT * FROM {table_name} WHERE interval = '{interval}'"
+        table_name = f"index_bars_{_validate_identifier(symbol)}"
+        validated_interval = _validate_identifier(interval)
+        sql = f"SELECT * FROM {table_name} WHERE `interval` = '{validated_interval}'"
 
         if start_dt:
             sql += f" AND ts >= '{start_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
         if end_dt:
             sql += f" AND ts <= '{end_dt.strftime('%Y-%m-%d %H:%M:%S')}'"
 
-        sql += f" ORDER BY ts DESC LIMIT {limit}"
+        sql += f" ORDER BY ts DESC LIMIT {int(limit)}"
 
         data = await client.query(sql)
 

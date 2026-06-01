@@ -41,10 +41,12 @@ async def get_futures_quotes(
             # 从数据源获取
             from ...adapters import PytdxAdapter
             adapter = PytdxAdapter()
-            await adapter.connect()
-            symbol_list = symbols.split(",")
-            quotes = await adapter.get_futures_quotes(symbol_list)
-            await adapter.disconnect()
+            try:
+                await adapter.connect()
+                symbol_list = symbols.split(",")
+                quotes = await adapter.get_futures_quotes(symbol_list)
+            finally:
+                await adapter.disconnect()
 
             result = []
             for q in quotes:
@@ -141,11 +143,11 @@ async def get_futures_list(
     try:
         from ...adapters import PytdxAdapter
         adapter = PytdxAdapter()
-        await adapter.connect()
-
-        contracts = await adapter.get_all_futures_list()
-
-        await adapter.disconnect()
+        try:
+            await adapter.connect()
+            contracts = await adapter.get_all_futures_list()
+        finally:
+            await adapter.disconnect()
 
         if exchange:
             contracts = [c for c in contracts if c.get("exchange") == exchange.upper()]

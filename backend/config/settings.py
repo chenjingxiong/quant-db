@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # TDengine 配置
     tdengine_host: str = "tdengine"
     tdengine_port: int = 6030
+    tdengine_rest_port: int = 6041
     tdengine_user: str = "root"
     tdengine_password: str = "taosdata"
     tdengine_database: str = "quant_db"

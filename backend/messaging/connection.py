@@ -127,9 +127,10 @@ class RabbitMQConnection:
         """声明所有交换机"""
         for name, config in self.EXCHANGES.items():
             try:
-                await self._channel.exchange_declare(
+                exchange_type = config["type"]
+                await self._channel.declare_exchange(
                     name=name,
-                    type=config["type"],
+                    type=exchange_type,
                     durable=config.get("durable", True),
                 )
                 logger.debug(f"Declared exchange: {name}")
@@ -140,16 +141,15 @@ class RabbitMQConnection:
         """声明所有队列并绑定"""
         for queue_name, config in self.QUEUES.items():
             try:
-                # 声明队列
-                await self._channel.queue_declare(
-                    name=queue_name,
+                # 声明队列 (aio-pika 9.x API)
+                queue = await self._channel.declare_queue(
+                    queue_name,
                     durable=config.get("durable", True),
                 )
 
                 # 绑定到交换机
-                await self._channel.queue_bind(
-                    queue=queue_name,
-                    exchange=config["exchange"],
+                await queue.bind(
+                    config["exchange"],
                     routing_key=config["routing_key"],
                 )
 

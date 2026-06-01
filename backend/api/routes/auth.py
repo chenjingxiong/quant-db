@@ -5,7 +5,7 @@
 提供用户注册、登录、令牌刷新、API Key管理等功能
 """
 import time
-from fastapi import APIRouter, HTTPException, status, Depends
+from fastapi import APIRouter, HTTPException, status, Depends, Request, Body
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from loguru import logger
@@ -108,7 +108,8 @@ def get_jwt_handler_instance():
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(
-    request: UserRegisterRequest,
+    body: UserRegisterRequest,
+    request: Request,
     password_handler: PasswordHandler = Depends(get_password_handler_instance),
 ):
     """
@@ -123,7 +124,7 @@ async def register(
     await check_rate_limit(request, rate_limit_key, 3, 3600)  # 3次/小时
 
     # 验证密码强度
-    is_valid, errors = password_handler.validate_strength(request.password)
+    is_valid, errors = password_handler.validate_strength(body.password)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -132,19 +133,20 @@ async def register(
 
     # TODO: 实际实现需要查询数据库
     # 这里只是模拟返回成功
-    logger.info(f"User registration attempted: {request.username}")
+    logger.info(f"User registration attempted: {body.username}")
 
     return {
         "message": "User registered successfully",
-        "username": request.username,
-        "email": request.email,
-        "role": request.role
+        "username": body.username,
+        "email": body.email,
+        "role": body.role
     }
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
-    request: UserLoginRequest,
+    body: UserLoginRequest,
+    request: Request,
     password_handler: PasswordHandler = Depends(get_password_handler_instance),
     jwt_handler: JWTHandler = Depends(get_jwt_handler_instance),
 ):
@@ -161,13 +163,13 @@ async def login(
 
     # TODO: 实际实现需要查询数据库验证用户
     # 这里模拟返回成功
-    logger.info(f"User login attempted: {request.username}")
+    logger.info(f"User login attempted: {body.username}")
 
     # 模拟用户信息
     user = {
         "sub": "1",  # 用户ID
-        "username": request.username,
-        "email": f"{request.username}@example.com",
+        "username": body.username,
+        "email": f"{body.username}@example.com",
         "role": "admin",
     }
 
@@ -233,13 +235,16 @@ async def get_current_user(
     需要认证
     """
     # TODO: 从数据库获取完整用户信息
+    from datetime import datetime
+    iat = current_user.get("iat", 0)
+    last_login = datetime.fromtimestamp(iat).isoformat() if isinstance(iat, (int, float)) else str(iat)
     return UserInfoResponse(
         user_id=int(current_user.get("sub", "0")),
         username=current_user.get("username", ""),
         email=current_user.get("email", ""),
         role=current_user.get("role", "user"),
         created_at="2024-01-01T00:00:00",
-        last_login_at=current_user.get("iat", "2024-01-01T00:00:00")
+        last_login_at=last_login
     )
 
 
@@ -249,7 +254,7 @@ async def get_current_user(
 
 @router.post("/apikey", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key(
-    request: APIKeyCreateRequest,
+    request: Request,
     current_user: dict = Depends(require_auth),
     apikey_handler: APIKeyHandler = Depends(get_apikey_handler),
 ):
@@ -258,9 +263,10 @@ async def create_api_key(
 
     需要认证
     """
-    # 限流检查
-    rate_limit_key = get_rate_limit_key(request)
-    await check_rate_limit(request, rate_limit_key, 10, 3600)  # 10次/小时
+    # 解析请求体
+    raw = await request.json()
+    name = raw.get("name", "default")
+    scopes = raw.get("scopes", ["read"])
 
     # 生成API Key
     api_key, key_hash = apikey_handler.generate_api_key()
@@ -274,8 +280,8 @@ async def create_api_key(
     return APIKeyResponse(
         api_key=api_key,
         key_id=key_id,
-        name=request.name,
-        scopes=request.scopes,
+        name=name,
+        scopes=scopes,
         created_at=datetime.now().isoformat()
     )
 
@@ -325,7 +331,7 @@ async def list_api_keys(
 
 @router.post("/password/change")
 async def change_password(
-    request: PasswordChangeRequest,
+    request: Request,
     current_user: dict = Depends(require_auth),
     password_handler: PasswordHandler = Depends(get_password_handler_instance),
 ):
@@ -334,9 +340,22 @@ async def change_password(
 
     需要认证
     """
-    # 限流检查
-    rate_limit_key = get_rate_limit_key(request)
-    await check_rate_limit(request, rate_limit_key, 3, 3600)  # 3次/小时
+    # 解析请求体
+    raw = await request.json()
+    old_password = raw.get("old_password", "")
+    new_password = raw.get("new_password", "")
+
+    if not old_password or not new_password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="old_password and new_password are required"
+        )
+
+    if len(new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters"
+        )
 
     # TODO: 验证旧密码
     # TODO: 更新数据库中的密码

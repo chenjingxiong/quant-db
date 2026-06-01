@@ -103,10 +103,10 @@ services:
       - TZ=Asia/Shanghai
       - TDENGINE_HOST=tdengine
       - TDENGINE_PORT=6030
+      - TDENGINE_REST_PORT=6041
       - TDENGINE_USER=root
       - TDENGINE_PASSWORD=taosdata
       - TDENGINE_DATABASE=quant_db
-      - TDENGINE_AVAILABLE=false
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - POSTGRES_HOST=postgres

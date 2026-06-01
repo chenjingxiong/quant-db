@@ -104,12 +104,21 @@ async def run_backtest(request: BacktestRequest):
 def _get_mock_bars(symbol: str, count: int) -> List[Dict]:
     """生成模拟K线数据"""
     import random
+    from datetime import datetime, timedelta
+
     random.seed(hash(symbol) % 2**31)
 
     bars = []
     price = 10.0 + random.uniform(0, 50)
+    base_date = datetime(2024, 1, 2)
 
     for i in range(count):
+        # Skip weekends for realistic trading days
+        current_date = base_date + timedelta(days=i)
+        while current_date.weekday() >= 5:  # Saturday=5, Sunday=6
+            current_date += timedelta(days=1)
+            base_date = current_date
+
         change = random.gauss(0, 0.02)
         open_p = price
         close_p = price * (1 + change)
@@ -119,7 +128,7 @@ def _get_mock_bars(symbol: str, count: int) -> List[Dict]:
 
         bars.append({
             "symbol": symbol,
-            "ts": f"2024-{(i // 22) + 1:02d}-{(i % 22) + 1:02d}",
+            "ts": current_date.strftime("%Y-%m-%d"),
             "open": round(open_p, 2),
             "high": round(high_p, 2),
             "low": round(low_p, 2),

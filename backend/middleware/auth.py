@@ -4,8 +4,9 @@
 
 提供JWT认证、API Key认证、权限验证等功能
 """
+import json
 from typing import Optional, Callable, List
-from fastapi import Request, HTTPException, status
+from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
 
@@ -109,7 +110,14 @@ class AuthMiddleware:
             cached_user = await self.cache_manager.get(cache_key)
 
             if cached_user:
-                user_info = eval(cached_user) if isinstance(cached_user, str) else cached_user
+                if isinstance(cached_user, str):
+                    try:
+                        user_info = json.loads(cached_user)
+                    except json.JSONDecodeError:
+                        logger.warning("Failed to decode cached API key info")
+                        return None
+                else:
+                    user_info = cached_user
 
                 # 检查权限
                 if required_permissions:
@@ -142,7 +150,7 @@ def get_auth_middleware() -> AuthMiddleware:
 
 async def require_auth(
     request: Request,
-    required_permissions: Optional[List[Permission]] = None
+    required_permissions: Optional[List[Permission]] = Depends(lambda: None)
 ) -> dict:
     """
     要求认证的依赖注入函数

@@ -6,20 +6,20 @@
 """
 from typing import Dict, Any, List, Optional
 from loguru import logger
-from .filters import FieldCondition, BasicFilter, TechnicalFilter, FinancialFilter
+from .filters import BaseFilter, FieldCondition, CrossFieldCondition, BasicFilter, TechnicalFilter, FinancialFilter
 
 
 class ScreenerEngine:
     """选股引擎"""
 
     def __init__(self):
-        self._conditions: List[FieldCondition] = []
+        self._conditions: List[BaseFilter] = []
 
-    def add_condition(self, condition: FieldCondition):
+    def add_condition(self, condition: BaseFilter):
         """添加筛选条件"""
         self._conditions.append(condition)
 
-    def add_conditions(self, conditions: List[FieldCondition]):
+    def add_conditions(self, conditions: List[BaseFilter]):
         """批量添加条件"""
         self._conditions.extend(conditions)
 
@@ -34,17 +34,17 @@ class ScreenerEngine:
         logic = config.get("logic", "and")
 
         # 基础条件
-        if "basic" in config:
+        if config.get("basic"):
             conditions = BasicFilter.create_conditions(config["basic"])
             self.add_conditions(conditions)
 
         # 技术指标条件
-        if "technical" in config:
+        if config.get("technical"):
             conditions = TechnicalFilter.create_conditions(config["technical"])
             self.add_conditions(conditions)
 
         # 财务条件
-        if "financial" in config:
+        if config.get("financial"):
             conditions = FinancialFilter.create_conditions(config["financial"])
             self.add_conditions(conditions)
 

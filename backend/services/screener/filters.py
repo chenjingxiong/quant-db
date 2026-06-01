@@ -63,6 +63,42 @@ class FieldCondition(BaseFilter):
         return f"{self.field} {self.operator} {self.value}"
 
 
+class CrossFieldCondition(BaseFilter):
+    """跨字段条件过滤器 - 比较两个字段的值"""
+
+    name = "cross_field_condition"
+
+    OPERATORS = {
+        ">": lambda a, b: a > b,
+        ">=": lambda a, b: a >= b,
+        "<": lambda a, b: a < b,
+        "<=": lambda a, b: a <= b,
+        "==": lambda a, b: a == b,
+    }
+
+    def __init__(self, field_a: str, operator: str, field_b: str):
+        self.field_a = field_a
+        self.operator = operator
+        self.field_b = field_b
+
+        if operator not in self.OPERATORS:
+            raise ValueError(f"Unsupported operator: {operator}")
+
+    def apply(self, stock_data: Dict[str, Any]) -> bool:
+        val_a = stock_data.get(self.field_a)
+        val_b = stock_data.get(self.field_b)
+        if val_a is None or val_b is None:
+            return False
+        try:
+            return self.OPERATORS[self.operator](val_a, val_b)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"CrossField filter error: {e}")
+            return False
+
+    def get_description(self) -> str:
+        return f"{self.field_a} {self.operator} {self.field_b}"
+
+
 class BasicFilter:
     """基础条件筛选器"""
 
@@ -109,11 +145,9 @@ class TechnicalFilter:
 
         for key, val in criteria.items():
             if key == "ma5_gt_ma10" and val:
-                conditions.append(FieldCondition("ma5", ">", 0))
-                conditions.append(FieldCondition("ma10", ">", 0))
+                conditions.append(CrossFieldCondition("ma5", ">", "ma10"))
             elif key == "ma10_gt_ma20" and val:
-                conditions.append(FieldCondition("ma10", ">", 0))
-                conditions.append(FieldCondition("ma20", ">", 0))
+                conditions.append(CrossFieldCondition("ma10", ">", "ma20"))
             elif key == "rsi_oversold":
                 conditions.append(FieldCondition("rsi6", "<", val if isinstance(val, (int, float)) else 30))
             elif key == "rsi_overbought":

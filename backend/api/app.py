@@ -16,7 +16,7 @@ from ..config import get_settings
 from ..storage import TDEngineClient, SchemaManager, _check_tdengine_available
 from ..adapters import PytdxAdapter
 from ..collectors.scheduler import CollectorScheduler
-from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route, indicators, screener, portfolio, backtest
+from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route, indicators, screener, portfolio, backtest, alerts
 from .errors import (
     APIException,
     api_exception_handler,
@@ -38,6 +38,10 @@ async def lifespan(app: FastAPI):
     global td_client, collector_scheduler
 
     logger.info("Starting Quant DB API...")
+
+    # 记录应用启动时间
+    from .routes.health import set_app_start_time
+    set_app_start_time()
 
     # 初始化 TDengine 连接（如果可用）
     if _check_tdengine_available() and TDEngineClient is not None:
@@ -366,6 +370,13 @@ curl "http://localhost:8000/api/v1/stocks/quotes?symbols=000001,600000"
         backtest.router,
         prefix="/api/v1/backtest",
         tags=["Backtest"],
+    )
+
+    # 告警路由
+    app.include_router(
+        alerts.router,
+        prefix="/api/v1",
+        tags=["Alerts"],
     )
 
     # 根路径

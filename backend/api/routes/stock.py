@@ -65,10 +65,12 @@ async def get_stock_quotes(
         if not client:
             # 如果数据库未连接，尝试直接从数据源获取
             adapter = PytdxAdapter()
-            await adapter.connect()
-            symbol_list = symbols.split(",")
-            quotes = await adapter.get_stock_quotes(symbol_list)
-            await adapter.disconnect()
+            try:
+                await adapter.connect()
+                symbol_list = symbols.split(",")
+                quotes = await adapter.get_stock_quotes(symbol_list)
+            finally:
+                await adapter.disconnect()
 
             result = []
             for q in quotes:
@@ -183,11 +185,11 @@ async def get_stock_list(
     """
     try:
         adapter = PytdxAdapter()
-        await adapter.connect()
-
-        stocks = await adapter.get_all_stock_list()
-
-        await adapter.disconnect()
+        try:
+            await adapter.connect()
+            stocks = await adapter.get_all_stock_list()
+        finally:
+            await adapter.disconnect()
 
         # 过滤市场
         if market:
@@ -206,13 +208,21 @@ async def get_stock_list(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{symbol}/quote", response_model=StockQuoteResponse)
+@router.get("/{symbol}/quote")
 async def get_stock_quote(symbol: str):
     """获取单个股票行情"""
-    quotes = await get_stock_quotes(symbols=symbol)
-    if quotes:
-        return quotes[0]
-    raise HTTPException(status_code=404, detail=f"Quote not found for {symbol}")
+    try:
+        quotes = await get_stock_quotes(symbols=symbol)
+        if quotes:
+            return quotes[0]
+        # 无数据时返回空行情
+        return StockQuoteResponse(
+            symbol=symbol,
+            ts="",
+        )
+    except Exception as e:
+        logger.error(f"Get stock quote error: {e}")
+        return StockQuoteResponse(symbol=symbol, ts="")
 
 
 @router.get("/{symbol}/detail")

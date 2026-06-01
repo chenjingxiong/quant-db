@@ -1,60 +1,50 @@
 # -*- coding: utf-8 -*-
 """
-TDengine 客户端封装
+TDengine 客户端封装 (REST API 模式)
 
-提供连接管理、批量写入、查询等功能
+使用 taosrest 通过 HTTP 接口连接 TDengine，避免原生 C 驱动的 exec-stack 限制
 """
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from loguru import logger
-import json
 
-# 延迟导入taos以支持可选的TDengine功能
-_taos_module = None
+# 延迟导入 taosrest
+_taosrest_module = None
 _TDAVAILABLE = False
 
-def _get_taos():
-    """获取taos模块（延迟导入）"""
-    global _taos_module, _TDAVAILABLE
-    if _taos_module is not None:
-        return _taos_module
+
+def _get_taosrest():
+    """获取 taosrest 模块（延迟导入）"""
+    global _taosrest_module, _TDAVAILABLE
+    if _taosrest_module is not None:
+        return _taosrest_module
     try:
-        import taos
-        _taos_module = taos
+        import taosrest
+        _taosrest_module = taosrest
         _TDAVAILABLE = True
-        return taos
-    except (ImportError, OSError) as e:
+        return taosrest
+    except Exception as e:
         _TDAVAILABLE = False
-        logger.warning(f"TDengine not available: {e}")
+        logger.warning(f"TDengine REST driver not available: {e}")
         return None
 
-def is_tdengine_available():
-    """检查TDengine是否可用"""
-    if not _TDAVAILABLE:
-        _get_taos()
-    return _TDAVAILABLE
 
-# 类型注释（仅在类型检查时使用）
-if TYPE_CHECKING:
-    try:
-        from taos import TaosConnection
-    except ImportError:
-        TaosConnection = object  # type: ignore
-else:
-    # 运行时使用字符串类型注解
-    TaosConnection = object  # type: ignore
+def is_tdengine_available():
+    """检查 TDengine REST 驱动是否可用"""
+    if not _TDAVAILABLE:
+        _get_taosrest()
+    return _TDAVAILABLE
 
 
 from ..config import get_settings
-from ..utils.async_helper import get_event_loop
 
 
 class TDEngineClient:
     """
-    TDengine 客户端
+    TDengine 客户端 (REST API 模式)
 
-    提供异步接口的TDengine操作
+    通过 taosrest 连接 TDengine REST 接口 (端口 6041)
     """
 
     def __init__(self, config: Optional[Dict] = None):
@@ -65,20 +55,19 @@ class TDEngineClient:
             config: 配置字典
         """
         if not is_tdengine_available():
-            raise ImportError("TDengine client library is not available")
+            raise ImportError("TDengine REST client library (taosrest) is not available")
 
         self.settings = get_settings()
 
         # 连接配置
         self.host = self.settings.tdengine_host
-        self.port = self.settings.tdengine_port
+        self.rest_port = self.settings.tdengine_rest_port
         self.user = self.settings.tdengine_user
         self.password = self.settings.tdengine_password
         self.database = self.settings.tdengine_database
 
-        # 连接池
-        self._connections: List["TaosConnection"] = []
-        self._max_connections = 10
+        # REST 连接
+        self._connection = None
         self._lock = asyncio.Lock()
 
         # 批量写入配置
@@ -101,56 +90,58 @@ class TDEngineClient:
             是否成功
         """
         try:
+            taosrest = _get_taosrest()
+            url = f"http://{self.host}:{self.rest_port}"
+
             conn = await asyncio.get_running_loop().run_in_executor(
                 None,
-                lambda: taos.connect(
-                    host=self.host,
-                    port=self.port,
+                lambda: taosrest.connect(
+                    url=url,
                     user=self.user,
                     password=self.password,
                 )
             )
 
             async with self._lock:
-                self._connections.append(conn)
+                self._connection = conn
 
-            logger.info(f"Connected to TDengine: {self.host}:{self.port}")
+            logger.info(f"Connected to TDengine REST API: {self.host}:{self.rest_port}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to connect to TDengine: {e}")
+            logger.error(f"Failed to connect to TDengine REST API: {e}")
             return False
 
     async def disconnect(self):
-        """断开所有连接"""
+        """断开连接"""
         async with self._lock:
-            for conn in self._connections:
+            if self._connection:
                 try:
-                    conn.close()
+                    self._connection.close()
                 except Exception:
                     pass
-            self._connections.clear()
+                self._connection = None
 
         logger.info("Disconnected from TDengine")
 
-    async def _get_connection(self) -> "TaosConnection":
-        """获取一个连接"""
+    async def _get_connection(self):
+        """获取连接"""
         async with self._lock:
-            if self._connections:
-                return self._connections[0]
+            if self._connection is not None:
+                return self._connection
 
         # 如果没有连接，创建一个新的
         await self.connect()
         async with self._lock:
-            return self._connections[0]
+            return self._connection
 
     async def execute(self, sql: str, params: Optional[Tuple] = None) -> Any:
         """
-        执行SQL语句
+        执行 SQL 语句
 
         Args:
-            sql: SQL语句
-            params: 参数
+            sql: SQL 语句
+            params: 参数（REST 模式下使用字符串格式化）
 
         Returns:
             执行结果
@@ -159,15 +150,15 @@ class TDEngineClient:
             conn = await self._get_connection()
 
             if params:
-                result = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda: conn.execute(sql, params)
-                )
-            else:
-                result = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda: conn.execute(sql)
-                )
+                sql = self._bind_params(sql, params)
+
+            # REST 模式下自动在表操作 SQL 中添加数据库名前缀
+            sql = self._qualify_sql(sql)
+
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._execute_sql(conn, sql)
+            )
 
             return result
 
@@ -176,12 +167,102 @@ class TDEngineClient:
             self.stats["errors"] += 1
             raise
 
-    async def execute_many(self, sql: str, params_list: List[Tuple]) -> Any:
+    def _execute_sql(self, conn, sql: str) -> Any:
+        """在 executor 中执行 SQL"""
+        # REST 模式下 USE 无意义，跳过
+        if sql.strip().upper().startswith("USE "):
+            return None
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        try:
+            return cursor.rowcount
+        except Exception:
+            return None
+
+    def _qualify_sql(self, sql: str) -> str:
         """
-        批量执行SQL
+        为 SQL 语句自动添加数据库名前缀（REST 模式无会话状态）
+
+        仅对需要数据库上下文的 SQL 进行处理：
+        - CREATE STABLE → CREATE STABLE db.table
+        - INSERT INTO → INSERT INTO db.table
+        - SELECT * FROM → SELECT * FROM db.table
+        - USE database → 跳过（已在 use_database 中处理）
+        - CREATE DATABASE → 跳过
+        - SHOW → 跳过
+        """
+        if not self.database:
+            return sql
+
+        upper = sql.strip().upper()
+
+        # 跳过不需要限定的语句
+        if upper.startswith(("CREATE DATABASE", "USE ", "SHOW ", "SELECT 1", "DROP ")):
+            return sql
+
+        import re
+
+        # CREATE STABLE IF NOT EXISTS table_name → CREATE STABLE IF NOT EXISTS db.table_name
+        if "CREATE STABLE" in upper:
+            sql = re.sub(
+                r'(CREATE\s+STABLE\s+IF\s+NOT\s+EXISTS\s+)(\w+)',
+                rf'\1{self.database}.\2',
+                sql,
+                flags=re.IGNORECASE
+            )
+            return sql
+
+        # INSERT INTO table_name → INSERT INTO db.table_name
+        if upper.startswith("INSERT"):
+            sql = re.sub(
+                r'(INSERT\s+INTO\s+)(\w+)',
+                rf'\1{self.database}.\2',
+                sql,
+                flags=re.IGNORECASE
+            )
+            return sql
+
+        # SELECT ... FROM table_name → SELECT ... FROM db.table_name
+        if upper.startswith("SELECT"):
+            sql = re.sub(
+                r'(FROM\s+)(\w+)',
+                rf'\1{self.database}.\2',
+                sql,
+                flags=re.IGNORECASE
+            )
+            return sql
+
+        return sql
+
+    def _bind_params(self, sql: str, params: Tuple) -> str:
+        """
+        将参数绑定到 SQL（REST 模式不支持 ? 占位符，改用字符串格式化）
 
         Args:
-            sql: SQL语句
+            sql: 带 ? 占位符的 SQL
+            params: 参数元组
+
+        Returns:
+            格式化后的 SQL
+        """
+        for param in params:
+            if isinstance(param, str):
+                value = f"'{param}'"
+            elif isinstance(param, (int, float)):
+                value = str(param)
+            elif param is None:
+                value = "NULL"
+            else:
+                value = f"'{param}'"
+            sql = sql.replace("?", value, 1)
+        return sql
+
+    async def execute_many(self, sql: str, params_list: List[Tuple]) -> Any:
+        """
+        批量执行 SQL
+
+        Args:
+            sql: SQL 语句
             params_list: 参数列表
 
         Returns:
@@ -189,14 +270,18 @@ class TDEngineClient:
         """
         try:
             conn = await self._get_connection()
-            loop = get_event_loop()
 
-            result = await loop.run_in_executor(
-                None,
-                lambda: conn.execute_many(sql, params_list)
-            )
+            # REST 模式：逐条执行
+            results = []
+            for params in params_list:
+                formatted_sql = self._bind_params(sql, params)
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda s=formatted_sql: self._execute_sql(conn, s)
+                )
+                results.append(result)
 
-            return result
+            return results
 
         except Exception as e:
             logger.error(f"Execute many SQL failed: {e}")
@@ -208,7 +293,7 @@ class TDEngineClient:
         查询数据
 
         Args:
-            sql: SQL语句
+            sql: SQL 语句
             params: 参数
 
         Returns:
@@ -217,17 +302,16 @@ class TDEngineClient:
         try:
             conn = await self._get_connection()
 
-            result = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: conn.query(sql)
-            )
+            if params:
+                sql = self._bind_params(sql, params)
 
-            # 转换为字典列表
-            data = []
-            if result:
-                columns = [field.name for field in result.fields]
-                for row in result:
-                    data.append(dict(zip(columns, row)))
+            # REST 模式下自动在表操作 SQL 中添加数据库名前缀
+            sql = self._qualify_sql(sql)
+
+            data = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._query_sql(conn, sql)
+            )
 
             self.stats["total_queried"] += len(data)
             return data
@@ -236,6 +320,31 @@ class TDEngineClient:
             logger.error(f"Query failed: {e}\nSQL: {sql}")
             self.stats["errors"] += 1
             return []
+
+    def _query_sql(self, conn, sql: str) -> List[Dict]:
+        """在 executor 中执行查询"""
+        cursor = conn.cursor()
+        cursor.execute(sql)
+
+        # 获取列名
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+
+        # 获取数据
+        rows = cursor.fetchall()
+
+        # 转换为字典列表
+        data = []
+        for row in rows:
+            row_dict = {}
+            for i, col in enumerate(columns):
+                val = row[i] if i < len(row) else None
+                # 处理 datetime 对象的序列化
+                if isinstance(val, datetime):
+                    val = val.isoformat()
+                row_dict[col] = val
+            data.append(row_dict)
+
+        return data
 
     async def insert_stock_quote(self, quote: Dict) -> bool:
         """
@@ -248,41 +357,31 @@ class TDEngineClient:
             是否成功
         """
         try:
-            # 确定表名
             symbol = quote.get("symbol", "")
             table_name = f"stock_quotes_{symbol}"
 
-            # 准备数据
             ts = self._format_timestamp(quote.get("ts"))
-            tags = (
-                quote.get("symbol", ""),
-                quote.get("market", "SZ"),
+
+            sql = (
+                f"INSERT INTO {table_name} USING stock_quotes TAGS "
+                f"('{quote.get('symbol', '')}', '{quote.get('market', 'SZ')}') "
+                f"VALUES ('{ts}', "
+                f"{quote.get('open', 'NULL')}, "
+                f"{quote.get('high', 'NULL')}, "
+                f"{quote.get('low', 'NULL')}, "
+                f"{quote.get('close', 'NULL')}, "
+                f"{quote.get('pre_close', 'NULL')}, "
+                f"{quote.get('volume', 'NULL')}, "
+                f"{quote.get('amount', 'NULL')}, "
+                f"{quote.get('change', 'NULL')}, "
+                f"{quote.get('change_percent', 'NULL')}, "
+                f"{quote.get('bid_price1', 'NULL')}, "
+                f"{quote.get('bid_volume1', 'NULL')}, "
+                f"{quote.get('ask_price1', 'NULL')}, "
+                f"{quote.get('ask_volume1', 'NULL')})"
             )
 
-            fields = (
-                ts,
-                quote.get("open"),
-                quote.get("high"),
-                quote.get("low"),
-                quote.get("close"),
-                quote.get("pre_close"),
-                quote.get("volume"),
-                quote.get("amount"),
-                quote.get("change"),
-                quote.get("change_percent"),
-                quote.get("bid_price1"),
-                quote.get("bid_volume1"),
-                quote.get("ask_price1"),
-                quote.get("ask_volume1"),
-            )
-
-            # 构建SQL
-            sql = f"""
-                INSERT INTO {table_name} USING stock_quotes TAGS (?, ?)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-
-            await self.execute(sql, tags + fields)
+            await self.execute(sql)
             self.stats["total_inserted"] += 1
             return True
 
@@ -304,7 +403,6 @@ class TDEngineClient:
             return 0
 
         try:
-            # 按symbol分组
             grouped: Dict[str, List[Dict]] = {}
             for bar in bars:
                 symbol = bar.get("symbol", "")
@@ -319,29 +417,27 @@ class TDEngineClient:
                 table_name = f"stock_bars_{symbol}"
                 interval = symbol_bars[0].get("interval", "1min")
 
-                # 准备批量数据
-                params_list = []
+                # 构建 VALUES 子句
+                values_parts = []
                 for bar in symbol_bars:
                     ts = self._format_timestamp(bar.get("ts"))
-                    tags = (symbol, bar.get("market", "SZ"), interval)
-                    fields = (
-                        ts,
-                        bar.get("open"),
-                        bar.get("high"),
-                        bar.get("low"),
-                        bar.get("close"),
-                        bar.get("volume"),
-                        bar.get("amount"),
+                    values_parts.append(
+                        f"('{ts}', "
+                        f"{bar.get('open', 'NULL')}, "
+                        f"{bar.get('high', 'NULL')}, "
+                        f"{bar.get('low', 'NULL')}, "
+                        f"{bar.get('close', 'NULL')}, "
+                        f"{bar.get('volume', 'NULL')}, "
+                        f"{bar.get('amount', 'NULL')})"
                     )
-                    params_list.append(tags + fields)
 
-                # 批量插入
-                sql = f"""
-                    INSERT INTO {table_name} USING stock_bars TAGS (?, ?, ?)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """
+                sql = (
+                    f"INSERT INTO {table_name} USING stock_bars TAGS "
+                    f"('{symbol}', '{bar.get('market', 'SZ')}', '{interval}') "
+                    f"VALUES {', '.join(values_parts)}"
+                )
 
-                await self.execute_many(sql, params_list)
+                await self.execute(sql)
                 total_inserted += len(symbol_bars)
 
             self.stats["total_inserted"] += total_inserted
@@ -366,32 +462,25 @@ class TDEngineClient:
             table_name = f"futures_quotes_{symbol}"
 
             ts = self._format_timestamp(quote.get("ts"))
-            tags = (
-                symbol,
-                quote.get("exchange", "CFFEX"),
+
+            sql = (
+                f"INSERT INTO {table_name} USING futures_quotes TAGS "
+                f"('{symbol}', '{quote.get('exchange', 'CFFEX')}') "
+                f"VALUES ('{ts}', "
+                f"{quote.get('open', 'NULL')}, "
+                f"{quote.get('high', 'NULL')}, "
+                f"{quote.get('low', 'NULL')}, "
+                f"{quote.get('close', 'NULL')}, "
+                f"{quote.get('pre_close', 'NULL')}, "
+                f"{quote.get('settlement', 'NULL')}, "
+                f"{quote.get('volume', 'NULL')}, "
+                f"{quote.get('amount', 'NULL')}, "
+                f"{quote.get('open_interest', 'NULL')}, "
+                f"{quote.get('change', 'NULL')}, "
+                f"{quote.get('change_percent', 'NULL')})"
             )
 
-            fields = (
-                ts,
-                quote.get("open"),
-                quote.get("high"),
-                quote.get("low"),
-                quote.get("close"),
-                quote.get("pre_close"),
-                quote.get("settlement"),
-                quote.get("volume"),
-                quote.get("amount"),
-                quote.get("open_interest"),
-                quote.get("change"),
-                quote.get("change_percent"),
-            )
-
-            sql = f"""
-                INSERT INTO {table_name} USING futures_quotes TAGS (?, ?)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-
-            await self.execute(sql, tags + fields)
+            await self.execute(sql)
             self.stats["total_inserted"] += 1
             return True
 
@@ -427,29 +516,28 @@ class TDEngineClient:
                 table_name = f"futures_bars_{symbol}"
                 interval = symbol_bars[0].get("interval", "1min")
 
-                params_list = []
+                values_parts = []
                 for bar in symbol_bars:
                     ts = self._format_timestamp(bar.get("ts"))
-                    tags = (symbol, bar.get("exchange", "CFFEX"), interval)
-                    fields = (
-                        ts,
-                        bar.get("open"),
-                        bar.get("high"),
-                        bar.get("low"),
-                        bar.get("close"),
-                        bar.get("volume"),
-                        bar.get("amount"),
-                        bar.get("open_interest"),
-                        bar.get("settlement"),
+                    values_parts.append(
+                        f"('{ts}', "
+                        f"{bar.get('open', 'NULL')}, "
+                        f"{bar.get('high', 'NULL')}, "
+                        f"{bar.get('low', 'NULL')}, "
+                        f"{bar.get('close', 'NULL')}, "
+                        f"{bar.get('volume', 'NULL')}, "
+                        f"{bar.get('amount', 'NULL')}, "
+                        f"{bar.get('open_interest', 'NULL')}, "
+                        f"{bar.get('settlement', 'NULL')})"
                     )
-                    params_list.append(tags + fields)
 
-                sql = f"""
-                    INSERT INTO {table_name} USING futures_bars TAGS (?, ?, ?)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
+                sql = (
+                    f"INSERT INTO {table_name} USING futures_bars TAGS "
+                    f"('{symbol}', '{bar.get('exchange', 'CFFEX')}', '{interval}') "
+                    f"VALUES {', '.join(values_parts)}"
+                )
 
-                await self.execute_many(sql, params_list)
+                await self.execute(sql)
                 total_inserted += len(symbol_bars)
 
             self.stats["total_inserted"] += total_inserted
@@ -482,7 +570,7 @@ class TDEngineClient:
         """
         table_name = f"stock_bars_{symbol}"
 
-        sql = f"SELECT * FROM {table_name} WHERE interval = '{interval}'"
+        sql = f"SELECT * FROM {table_name} WHERE `interval` = '{interval}'"
 
         if start_time:
             sql += f" AND ts >= '{self._format_timestamp(start_time)}'"
@@ -539,26 +627,21 @@ class TDEngineClient:
         Returns:
             K线数据列表
         """
-        # Validate symbol to prevent injection
         if not symbol.replace("_", "").replace("-", "").isalnum():
             logger.warning(f"Invalid futures symbol: {symbol}")
             return []
 
         table_name = f"futures_bars_{symbol}"
-        sql = f"SELECT * FROM {table_name} WHERE interval = ?"
+        sql = f"SELECT * FROM {table_name} WHERE `interval` = '{interval}'"
 
-        params = [interval]
         if start_time:
-            sql += " AND ts >= ?"
-            params.append(self._format_timestamp(start_time))
+            sql += f" AND ts >= '{self._format_timestamp(start_time)}'"
         if end_time:
-            sql += " AND ts <= ?"
-            params.append(self._format_timestamp(end_time))
+            sql += f" AND ts <= '{self._format_timestamp(end_time)}'"
 
-        sql += " ORDER BY ts DESC LIMIT ?"
-        params.append(str(limit))
+        sql += f" ORDER BY ts DESC LIMIT {limit}"
 
-        return await self.query(sql, tuple(params))
+        return await self.query(sql)
 
     async def query_futures_quote_latest(self, symbol: str) -> Optional[Dict]:
         """
@@ -581,9 +664,8 @@ class TDEngineClient:
         return result[0] if result else None
 
     async def use_database(self, database: str):
-        """切换数据库"""
-        sql = f"USE {database}"
-        await self.execute(sql)
+        """切换数据库（REST 模式下记录当前数据库，后续 SQL 自动添加前缀）"""
+        self.database = database
         logger.info(f"Switched to database: {database}")
 
     async def create_database(self, database: str, keep: int = 3650):
@@ -594,7 +676,7 @@ class TDEngineClient:
             database: 数据库名
             keep: 数据保留天数
         """
-        sql = f"CREATE DATABASE IF NOT EXISTS {database} KEEP {keep} DAYS BUFFER 16"
+        sql = f"CREATE DATABASE IF NOT EXISTS {database} KEEP {keep}"
         await self.execute(sql)
         logger.info(f"Created database: {database}")
 

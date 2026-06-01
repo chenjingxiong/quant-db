@@ -34,7 +34,7 @@ class DatabaseSchema:
             ) TAGS (
                 symbol NCHAR(20),
                 market NCHAR(4),
-                interval NCHAR(10)
+                `interval` NCHAR(10)
             );
         """,
 
@@ -90,7 +90,7 @@ class DatabaseSchema:
             ) TAGS (
                 symbol NCHAR(20),
                 exchange NCHAR(10),
-                interval NCHAR(10)
+                `interval` NCHAR(10)
             );
         """,
 
@@ -143,7 +143,7 @@ class DatabaseSchema:
             ) TAGS (
                 symbol NCHAR(20),
                 index_type NCHAR(10),
-                interval NCHAR(10)
+                `interval` NCHAR(10)
             );
         """,
 
@@ -203,7 +203,7 @@ class DatabaseSchema:
         sql_lines = []
 
         # 创建数据库
-        sql_lines.append(f"CREATE DATABASE IF NOT EXISTS {cls.DATABASE_NAME} KEEP 3650 DAYS BUFFER 16;")
+        sql_lines.append(f"CREATE DATABASE IF NOT EXISTS {cls.DATABASE_NAME} KEEP 3650;")
         sql_lines.append(f"USE {cls.DATABASE_NAME};")
 
         # 创建所有超级表

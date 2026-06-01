@@ -146,7 +146,7 @@ async def add_to_watchlist(item: WatchlistAdd):
         pg = await get_postgres_client()
         row = await pg.fetch_one(
             "INSERT INTO watchlist (symbol, name, notes) VALUES ($1, $2, $3) "
-            "ON CONFLICT (user_id, symbol) DO NOTHING "
+            "ON CONFLICT (symbol) DO NOTHING "
             "RETURNING id, symbol, name, notes, added_at::text",
             item.symbol, item.name, item.notes,
         )

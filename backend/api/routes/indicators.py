@@ -65,7 +65,13 @@ async def calculate_indicators(
         # 获取K线数据
         bars = await client.query_stock_bars(symbol=symbol, interval=interval, limit=limit)
         if not bars:
-            raise HTTPException(status_code=404, detail=f"No bar data found for {symbol}")
+            # 无数据时返回空结果
+            return IndicatorCalculateResponse(
+                symbol=symbol,
+                interval=interval,
+                count=0,
+                indicators={},
+            )
 
         bar_data = BarData.from_dicts(bars)
 
@@ -113,7 +119,15 @@ async def batch_calculate_indicators(request: IndicatorCalculateRequest):
             symbol=request.symbol, interval=request.interval, limit=request.limit
         )
         if not bars:
-            raise HTTPException(status_code=404, detail=f"No data for {request.symbol}")
+            # 无数据时返回空结果
+            return {
+                request.symbol: IndicatorCalculateResponse(
+                    symbol=request.symbol,
+                    interval=request.interval,
+                    count=0,
+                    indicators={},
+                )
+            }
 
         bar_data = BarData.from_dicts(bars)
 
