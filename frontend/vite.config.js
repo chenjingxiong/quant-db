@@ -14,11 +14,11 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://192.168.6.8:8000',
+        target: 'http://localhost:8000',
         changeOrigin: true
       },
       '/ws': {
-        target: 'ws://192.168.6.8:8000',
+        target: 'ws://localhost:8000',
         ws: true
       }
     }
