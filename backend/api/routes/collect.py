@@ -89,9 +89,17 @@ async def start_collection(config: CollectionConfig):
         if not scheduler:
             raise HTTPException(status_code=503, detail="Scheduler not available")
 
+        from ...config import get_settings
+        settings = get_settings()
+
         # 选择适配器
         if config.data_source == "pytdx":
-            adapter = PytdxAdapter()
+            pytdx_hosts = [h.strip() for h in settings.pytdx_hosts.split(",") if h.strip()]
+            adapter = PytdxAdapter({
+                "hosts": pytdx_hosts,
+                "port": settings.pytdx_port,
+                "timeout": settings.collect_timeout,
+            })
         elif config.data_source == "modtdx":
             adapter = ModtdxAdapter()
         elif config.data_source == "qmt":

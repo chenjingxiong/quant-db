@@ -131,16 +131,50 @@ async def register(
             detail={"error": "Weak password", "messages": errors}
         )
 
-    # TODO: 实际实现需要查询数据库
-    # 这里只是模拟返回成功
-    logger.info(f"User registration attempted: {body.username}")
+    # 创建用户到数据库
+    try:
+        from ...db.postgres_client import get_postgres_client
+        pg = await get_postgres_client()
 
-    return {
-        "message": "User registered successfully",
-        "username": body.username,
-        "email": body.email,
-        "role": body.role
-    }
+        # 检查用户名是否已存在
+        if await pg.exists("users", "username = $1", body.username):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already exists"
+            )
+
+        # 检查邮箱是否已存在
+        if await pg.exists("users", "email = $1", body.email):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already exists"
+            )
+
+        # 插入用户
+        password_hash = password_handler.hash_password(body.password)
+        user_id = await pg.insert("users", {
+            "username": body.username,
+            "email": body.email,
+            "password_hash": password_hash,
+            "role": body.role or "user",
+        }, returning="id")
+
+        logger.info(f"User registered: {body.username} (id={user_id})")
+
+        return {
+            "message": "User registered successfully",
+            "username": body.username,
+            "email": body.email,
+            "role": body.role or "user"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {str(e)}"
+        )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -161,25 +195,65 @@ async def login(
     rate_limit_key = get_rate_limit_key(request)
     await check_rate_limit(request, rate_limit_key, 5, 60)  # 5次/分钟
 
-    # TODO: 实际实现需要查询数据库验证用户
-    # 这里模拟返回成功
-    logger.info(f"User login attempted: {body.username}")
+    # 从数据库查询用户
+    try:
+        from ...db.postgres_client import get_postgres_client
+        pg = await get_postgres_client()
 
-    # 模拟用户信息
-    user = {
-        "sub": "1",  # 用户ID
-        "username": body.username,
-        "email": f"{body.username}@example.com",
-        "role": "admin",
-    }
+        user_row = await pg.fetch_one(
+            "SELECT id, username, email, password_hash, role, is_active FROM users WHERE username = $1",
+            body.username
+        )
+
+        if not user_row:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+
+        if not user_row["is_active"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is disabled"
+            )
+
+        # 验证密码
+        if not password_handler.verify_password(body.password, user_row["password_hash"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+
+        # 更新最后登录时间
+        await pg.execute(
+            "UPDATE users SET last_login_at = NOW() WHERE id = $1",
+            user_row["id"]
+        )
+
+        user = {
+            "sub": str(user_row["id"]),
+            "username": user_row["username"],
+            "email": user_row["email"],
+            "role": user_row["role"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed"
+        )
 
     # 创建令牌
     access_token = jwt_handler.create_access_token(user)
     refresh_token = jwt_handler.create_refresh_token(user)
 
-    # 提取过期时间
     from datetime import datetime, timedelta, timezone
     expires_in = 30 * 60  # 30分钟
+
+    logger.info(f"User logged in: {body.username}")
 
     return TokenResponse(
         access_token=access_token,
