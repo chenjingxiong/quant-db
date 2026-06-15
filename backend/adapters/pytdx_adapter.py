@@ -369,7 +369,7 @@ class PytdxAdapter(BaseAdapter):
             )
 
             bars = []
-            for item in reversed(data or []):  # pytdx返回的是倒序的
+            for item in (data or []):
                 try:
                     # 解析时间 (pytdx datetime格式可能是 "2024-01-01" 或 "2024-01-01 15:00")
                     dt_str = str(item["datetime"])
@@ -478,7 +478,7 @@ class PytdxAdapter(BaseAdapter):
             return []
 
     async def get_all_stock_list(self) -> List[Dict[str, Any]]:
-        """获取所有股票列表（分页获取全部）"""
+        """获取所有股票列表（分页获取全部，部分服务器首页返回空需要跳过）"""
         try:
             if not await self._reconnect_if_needed():
                 raise ConnectionError(f"{self.name}: failed to reconnect")
@@ -487,15 +487,26 @@ class PytdxAdapter(BaseAdapter):
 
             all_stocks = []
             for market, market_name in [(self.MARKET_SH, "SH"), (self.MARKET_SZ, "SZ")]:
-                start = 0
+                # 先获取总数量，确定遍历上限
+                try:
+                    total_count = await loop.run_in_executor(
+                        None, lambda m=market: self.api.get_security_count(m)
+                    )
+                except Exception:
+                    total_count = 50000  # fallback upper bound
                 page_size = 1000
-                while True:
+                start = 0
+                empty_pages = 0
+                while start < total_count and empty_pages < 3:
                     items = await loop.run_in_executor(
                         None,
                         lambda s=start, m=market: self.api.get_security_list(m, s)
                     )
                     if not items:
-                        break
+                        empty_pages += 1
+                        start += page_size
+                        continue
+                    empty_pages = 0
                     for item in items:
                         code = item.get("code", "")
                         if market_name == "SH" and code.startswith("6"):
@@ -505,15 +516,13 @@ class PytdxAdapter(BaseAdapter):
                                 "name": item.get("name", ""),
                                 "market": "SH"
                             })
-                        elif market_name == "SZ" and (code.startswith("0") or code.startswith("3")):
+                        elif market_name == "SZ" and (code.startswith("0") or code.startswith("3") or code.startswith("2")):
                             all_stocks.append({
                                 "symbol": f"SZ{code}",
                                 "code": code,
                                 "name": item.get("name", ""),
                                 "market": "SZ"
                             })
-                    if len(items) < page_size:
-                        break
                     start += page_size
 
             if all_stocks:
@@ -605,7 +614,7 @@ class PytdxAdapter(BaseAdapter):
             )
 
             bars = []
-            for item in reversed(data or []):
+            for item in (data or []):
                 try:
                     dt_str = str(item["datetime"])
                     # 验证日期合理性，跳过损坏数据
