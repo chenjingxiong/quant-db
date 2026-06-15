@@ -185,7 +185,7 @@ class TDEngineClient:
 
         仅对需要数据库上下文的 SQL 进行处理：
         - CREATE STABLE → CREATE STABLE db.table
-        - INSERT INTO → INSERT INTO db.table
+        - INSERT INTO t USING stable → INSERT INTO db.t USING db.stable
         - SELECT * FROM → SELECT * FROM db.table
         - USE database → 跳过（已在 use_database 中处理）
         - CREATE DATABASE → 跳过
@@ -202,20 +202,30 @@ class TDEngineClient:
 
         import re
 
+        db = re.escape(self.database)
+
         # CREATE STABLE IF NOT EXISTS table_name → CREATE STABLE IF NOT EXISTS db.table_name
         if "CREATE STABLE" in upper:
             sql = re.sub(
-                r'(CREATE\s+STABLE\s+IF\s+NOT\s+EXISTS\s+)(\w+)',
+                rf'(CREATE\s+STABLE\s+IF\s+NOT\s+EXISTS\s+)(?!{db}\.)(\w+)',
                 rf'\1{self.database}.\2',
                 sql,
                 flags=re.IGNORECASE
             )
             return sql
 
-        # INSERT INTO table_name → INSERT INTO db.table_name
+        # INSERT INTO t [USING stable] → INSERT INTO db.t [USING db.stable]
         if upper.startswith("INSERT"):
+            # Qualify the USING supertable first
             sql = re.sub(
-                r'(INSERT\s+INTO\s+)(\w+)',
+                rf'(USING\s+)(?!{db}\.)(\w+)',
+                rf'\1{self.database}.\2',
+                sql,
+                flags=re.IGNORECASE
+            )
+            # Then qualify the INSERT INTO target table
+            sql = re.sub(
+                rf'(INSERT\s+INTO\s+)(?!{db}\.)(\w+)',
                 rf'\1{self.database}.\2',
                 sql,
                 flags=re.IGNORECASE
@@ -225,7 +235,7 @@ class TDEngineClient:
         # SELECT ... FROM table_name → SELECT ... FROM db.table_name
         if upper.startswith("SELECT"):
             sql = re.sub(
-                r'(FROM\s+)(\w+)',
+                rf'(FROM\s+)(?!{db}\.)(\w+)',
                 rf'\1{self.database}.\2',
                 sql,
                 flags=re.IGNORECASE
