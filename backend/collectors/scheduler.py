@@ -196,6 +196,57 @@ class CollectorScheduler:
         finally:
             task.total_runs += 1
 
+    async def _store_quotes_to_tdengine(self, quotes, data_type: str):
+        """将采集到的行情数据写入TDengine"""
+        try:
+            from ..api.app import get_td_client
+            client = get_td_client()
+            if not client:
+                return
+
+            for quote in quotes:
+                try:
+                    q = quote.model_dump() if hasattr(quote, 'model_dump') else quote
+                    if not isinstance(q, dict):
+                        continue
+
+                    symbol = q.get("symbol", "")
+                    if not symbol:
+                        continue
+
+                    q.setdefault("ts", datetime.now().isoformat())
+                    q.setdefault("market", "SH" if symbol.startswith("SH") or symbol.startswith("6") else "SZ")
+
+                    if data_type == "stock":
+                        await client.insert_stock_quote(q)
+                    elif data_type == "futures":
+                        q.setdefault("exchange", "CFFEX")
+                        await client.insert_futures_quote(q)
+                    elif data_type == "index":
+                        q.setdefault("index_type", "composite")
+                        table_name = f"index_quotes_{symbol}"
+                        ts = client._format_timestamp(q.get("ts"))
+                        sql = (
+                            f"INSERT INTO {table_name} USING index_quotes TAGS "
+                            f"('{symbol}', '{q.get('index_type', 'composite')}') "
+                            f"VALUES ('{ts}', "
+                            f"{q.get('open', 'NULL')}, "
+                            f"{q.get('high', 'NULL')}, "
+                            f"{q.get('low', 'NULL')}, "
+                            f"{q.get('close', 'NULL')}, "
+                            f"{q.get('pre_close', 'NULL')}, "
+                            f"{q.get('change', 'NULL')}, "
+                            f"{q.get('change_percent', 'NULL')}, "
+                            f"0, 0, 0)"
+                        )
+                        await client.execute(sql)
+                except Exception as e:
+                    logger.debug(f"Store quote to TDengine failed: {e}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Store quotes to TDengine error: {e}")
+
     async def _collect_stock_quotes(self, task: CollectionTask):
         """采集股票行情"""
         quotes = await task.adapter.get_stock_quotes(task.symbols)
@@ -223,6 +274,9 @@ class CollectorScheduler:
         except Exception as e:
             logger.debug(f"WS summary broadcast failed: {e}")
         logger.info(f"Collected {len(quotes)} stock quotes for task {task.task_id}")
+
+        # 写入TDengine
+        await self._store_quotes_to_tdengine(quotes, "stock")
 
     async def _collect_futures_quotes(self, task: CollectionTask):
         """采集期货行情"""
@@ -252,6 +306,9 @@ class CollectorScheduler:
             logger.debug(f"WS summary broadcast failed: {e}")
         logger.info(f"Collected {len(quotes)} futures quotes for task {task.task_id}")
 
+        # 写入TDengine
+        await self._store_quotes_to_tdengine(quotes, "futures")
+
     async def _collect_index_quotes(self, task: CollectionTask):
         """采集指数行情"""
         quotes = await task.adapter.get_index_quotes(task.symbols)
@@ -280,11 +337,19 @@ class CollectorScheduler:
             logger.debug(f"WS summary broadcast failed: {e}")
         logger.info(f"Collected {len(quotes)} index quotes for task {task.task_id}")
 
+        # 写入TDengine
+        await self._store_quotes_to_tdengine(quotes, "index")
+
     def _calculate_next_run(self, task: CollectionTask) -> Optional[datetime]:
         if task.cron:
             return datetime.now() + timedelta(seconds=30)
         else:
-            interval = getattr(self.settings, 'collect_interval', 5)
+            interval = getattr(self.settings, 'collect_interval', 30)
+            # Exponential backoff on repeated failures (max 5 min)
+            if task.failed_count > 0 and task.retry_count > 0:
+                backoff = min(interval * (2 ** min(task.retry_count, 5)), 300)
+                logger.info(f"Task {task.task_id} backing off for {backoff}s (failures: {task.retry_count})")
+                return datetime.now() + timedelta(seconds=backoff)
             return datetime.now() + timedelta(seconds=interval)
 
     async def get_cached_data(self, batch_size: int = 100) -> List[dict]:

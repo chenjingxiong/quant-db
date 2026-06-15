@@ -15,7 +15,7 @@ import time
 from ..config import get_settings
 from ..storage import TDEngineClient, SchemaManager, _check_tdengine_available
 from ..adapters import PytdxAdapter
-from ..collectors.scheduler import CollectorScheduler
+from ..collectors.scheduler import CollectorScheduler, CollectionTask
 from .routes import stock, futures, index, sector, collect, health, websocket, metrics as metrics_route, indicators, screener, portfolio, backtest, alerts
 from .errors import (
     APIException,
@@ -65,8 +65,63 @@ async def lifespan(app: FastAPI):
     try:
         collector_scheduler = CollectorScheduler()
 
-        # 注册默认采集任务（可选）
-        # 这里可以根据配置注册不同的采集任务
+        # 注册默认采集任务
+        try:
+            pytdx_hosts = [h.strip() for h in settings.pytdx_hosts.split(",") if h.strip()]
+            adapter_config = {
+                "hosts": pytdx_hosts,
+                "port": settings.pytdx_port,
+                "timeout": settings.collect_timeout,
+            }
+
+            # 沪深300成分股分3组采集
+            fallback_symbols = [
+                "600000", "600030", "600036", "600104", "600111",
+                "600276", "600309", "600519", "600585", "600809",
+                "600887", "600900", "601012", "601088", "601166",
+                "601288", "601318", "601398", "601668", "601888",
+                "601899", "601985", "603259", "603288", "000001",
+                "000002", "000063", "000333", "000568", "000651",
+                "000725", "000858", "002142", "002230", "002415",
+                "002460", "002475", "002594", "002714", "300015",
+                "300059", "300124", "300274", "300498", "300750",
+                "300760",
+            ]
+            chunk_size = len(fallback_symbols) // 3 + 1
+            for i in range(3):
+                chunk = fallback_symbols[i * chunk_size:(i + 1) * chunk_size]
+                adapter = PytdxAdapter(adapter_config)
+                connected = await adapter.connect()
+                task = CollectionTask(
+                    task_id=f"stock_pytdx_{i}",
+                    name=f"stock collection from pytdx",
+                    adapter=adapter,
+                    data_type="stock",
+                    symbols=chunk,
+                    interval="1min",
+                    enabled=True,
+                )
+                collector_scheduler.register_task(task)
+                if not connected:
+                    logger.warning(f"Default task stock_pytdx_{i}: pytdx not connected yet, will retry")
+
+            # 指数采集任务
+            index_adapter = PytdxAdapter(adapter_config)
+            await index_adapter.connect()
+            index_task = CollectionTask(
+                task_id="index_pytdx_0",
+                name="index collection from pytdx",
+                adapter=index_adapter,
+                data_type="index",
+                symbols=["000001", "000300", "000905", "000852", "399001", "399006"],
+                interval="1min",
+                enabled=True,
+            )
+            collector_scheduler.register_task(index_task)
+
+            logger.info("Default collection tasks registered")
+        except Exception as e:
+            logger.warning(f"Failed to register default tasks: {e}")
 
         await collector_scheduler.start()
         logger.info("Collector scheduler started")

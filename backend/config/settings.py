@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     tdengine_database: str = "quant_db"
 
     # pytdx 配置
-    pytdx_hosts: str = "119.147.212.81,60.12.136.250"
+    pytdx_hosts: str = "60.12.136.250,218.75.126.9,115.238.56.198,60.191.117.167,180.153.18.170,115.238.90.165"
     pytdx_port: int = 7709
 
     # QMT 配置
