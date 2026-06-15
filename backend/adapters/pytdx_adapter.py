@@ -487,21 +487,20 @@ class PytdxAdapter(BaseAdapter):
 
             all_stocks = []
             for market, market_name in [(self.MARKET_SH, "SH"), (self.MARKET_SZ, "SZ")]:
-                # 先获取总数量，确定遍历上限
-                try:
-                    total_count = await loop.run_in_executor(
-                        None, lambda m=market: self.api.get_security_count(m)
-                    )
-                except Exception:
-                    total_count = 50000  # fallback upper bound
                 page_size = 1000
                 start = 0
                 empty_pages = 0
-                while start < total_count and empty_pages < 3:
-                    items = await loop.run_in_executor(
-                        None,
-                        lambda s=start, m=market: self.api.get_security_list(m, s)
-                    )
+                # 最多遍历 60 页 (60000 条)，足够覆盖全市场
+                while start < 60000 and empty_pages < 5:
+                    try:
+                        items = await loop.run_in_executor(
+                            None,
+                            lambda s=start, m=market: self.api.get_security_list(m, s)
+                        )
+                    except Exception:
+                        empty_pages += 1
+                        start += page_size
+                        continue
                     if not items:
                         empty_pages += 1
                         start += page_size
@@ -523,6 +522,8 @@ class PytdxAdapter(BaseAdapter):
                                 "name": item.get("name", ""),
                                 "market": "SZ"
                             })
+                    if len(items) < page_size:
+                        break
                     start += page_size
 
             if all_stocks:
