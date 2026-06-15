@@ -95,7 +95,7 @@ const stockList = ref([])
 const marketFilter = ref('')
 const searchText = ref('')
 const currentPage = ref(1)
-const pageSize = ref(50)
+const pageSize = ref(200)
 const total = ref(0)
 
 const getRowClass = (changePercent) => {
@@ -135,9 +135,8 @@ const refreshQuotes = async () => {
       const quote = quotes.find(q => q.symbol === stock.symbol)
       return quote ? { ...stock, ...quote } : stock
     })
-    ElMessage.success('行情已刷新')
   } catch (error) {
-    ElMessage.error('刷新行情失败')
+    // 静默失败，不打扰用户
   }
 }
 

@@ -587,7 +587,7 @@ class TDEngineClient:
         if end_time:
             sql += f" AND ts <= '{self._format_timestamp(end_time)}'"
 
-        sql += f" ORDER BY ts DESC LIMIT {limit}"
+        sql += f" ORDER BY ts ASC LIMIT {limit}"
 
         return await self.query(sql)
 
@@ -649,7 +649,7 @@ class TDEngineClient:
         if end_time:
             sql += f" AND ts <= '{self._format_timestamp(end_time)}'"
 
-        sql += f" ORDER BY ts DESC LIMIT {limit}"
+        sql += f" ORDER BY ts ASC LIMIT {limit}"
 
         return await self.query(sql)
 

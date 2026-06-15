@@ -478,47 +478,48 @@ class PytdxAdapter(BaseAdapter):
             return []
 
     async def get_all_stock_list(self) -> List[Dict[str, Any]]:
-        """获取所有股票列表"""
+        """获取所有股票列表（分页获取全部）"""
         try:
             if not await self._reconnect_if_needed():
                 raise ConnectionError(f"{self.name}: failed to reconnect")
 
             loop = get_event_loop()
 
-            # 获取上海股票列表
-            sh_stocks = await loop.run_in_executor(
-                None,
-                lambda: self.api.get_security_list(self.MARKET_SH, 0)
-            )
+            all_stocks = []
+            for market, market_name in [(self.MARKET_SH, "SH"), (self.MARKET_SZ, "SZ")]:
+                start = 0
+                page_size = 1000
+                while True:
+                    items = await loop.run_in_executor(
+                        None,
+                        lambda s=start, m=market: self.api.get_security_list(m, s)
+                    )
+                    if not items:
+                        break
+                    for item in items:
+                        code = item.get("code", "")
+                        if market_name == "SH" and code.startswith("6"):
+                            all_stocks.append({
+                                "symbol": f"SH{code}",
+                                "code": code,
+                                "name": item.get("name", ""),
+                                "market": "SH"
+                            })
+                        elif market_name == "SZ" and (code.startswith("0") or code.startswith("3")):
+                            all_stocks.append({
+                                "symbol": f"SZ{code}",
+                                "code": code,
+                                "name": item.get("name", ""),
+                                "market": "SZ"
+                            })
+                    if len(items) < page_size:
+                        break
+                    start += page_size
 
-            # 获取深圳股票列表
-            sz_stocks = await loop.run_in_executor(
-                None,
-                lambda: self.api.get_security_list(self.MARKET_SZ, 0)
-            )
+            if all_stocks:
+                logger.info(f"{self.name}: got {len(all_stocks)} stocks")
+                return all_stocks
 
-            stocks = []
-            for item in (sh_stocks or []):
-                stocks.append({
-                    "symbol": f"SH{item['code']}",
-                    "code": item["code"],
-                    "name": item.get("name", ""),
-                    "market": "SH"
-                })
-
-            for item in (sz_stocks or []):
-                stocks.append({
-                    "symbol": f"SZ{item['code']}",
-                    "code": item["code"],
-                    "name": item.get("name", ""),
-                    "market": "SZ"
-                })
-
-            if stocks:
-                logger.info(f"{self.name}: got {len(stocks)} stocks")
-                return stocks
-
-            # 如果 pytdx get_security_list 返回空，使用后备列表
             return self._fallback_stock_list()
 
         except Exception as e:

@@ -165,7 +165,6 @@ const handleSearch = () => {
 // 处理刷新
 const handleRefresh = () => {
   emit('refresh')
-  ElMessage.success('数据已刷新')
 }
 
 // 处理通知点击
